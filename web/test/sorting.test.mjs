@@ -132,8 +132,8 @@ console.log(`PASS - ${ALL_COLUMN_IDS.length} columns, ${GROUPS.length} groups, `
  * not a zero. A median that silently counted nulls as zeros would drag every
  * low-coverage column toward zero and read as a real, defensible number.
  */
-import { AGGREGATE_BY_KIND, SIZE_BY_KIND } from '../src/columns.def.ts'
-import { MIN_SAMPLE, median, total, sectorPercentiles } from '../src/stats.ts'
+import { AGGREGATE_BY_KIND, LEAF_BY_ID, SIZE_BY_KIND } from '../src/columns.def.ts'
+import { MIN_SAMPLE, median, total, goodness, sectorPercentiles } from '../src/stats.ts'
 
 const enough = (extra = []) => [...Array(MIN_SAMPLE).fill(1), ...extra]
 
@@ -181,12 +181,14 @@ for (const kind of Object.keys(SIZE_BY_KIND)) {
 
 // Percentiles: bounded, monotonic, and stable across ties.
 {
-  const leaf = { id: 'trailing_pe', kind: 'ratio', group: 'Valuation', header: 'P/E' }
+  // A directional leaf: only those are ranked, so the mechanics test needs one.
+  const leaf = { id: 'profit_margin', kind: 'percent', group: 'Quality',
+                 header: 'Margin', goodWhen: 'high' }
   const rows = [...Array(12).keys()].map((i) => ({
-    symbol: `S${i}`, sector: 'Tech', trailing_pe: i,
+    symbol: `S${i}`, sector: 'Tech', profit_margin: i,
   }))
   const pct = sectorPercentiles(rows, [leaf])
-  const values = rows.map((r) => pct.get(r.symbol).trailing_pe)
+  const values = rows.map((r) => pct.get(r.symbol).profit_margin)
 
   assert.equal(values[0], 0, 'lowest value sits at 0')
   assert.equal(values[11], 1, 'highest value sits at 1')
@@ -196,23 +198,71 @@ for (const kind of Object.keys(SIZE_BY_KIND)) {
   }
 
   const tied = [...Array(12).keys()].map((i) => ({
-    symbol: `T${i}`, sector: 'Tech', trailing_pe: i < 6 ? 10 : 20,
+    symbol: `T${i}`, sector: 'Tech', profit_margin: i < 6 ? 10 : 20,
   }))
   const tpct = sectorPercentiles(tied, [leaf])
-  assert.equal(tpct.get('T0').trailing_pe, tpct.get('T5').trailing_pe,
+  assert.equal(tpct.get('T0').profit_margin, tpct.get('T5').profit_margin,
     'tied values must share a percentile')
 
   // A sector too thin to median is also too thin to rank.
   const thin = [...Array(4).keys()].map((i) => ({
-    symbol: `U${i}`, sector: 'Tiny', trailing_pe: i,
+    symbol: `U${i}`, sector: 'Tiny', profit_margin: i,
   }))
   assert.equal(sectorPercentiles(thin, [leaf]).size, 0,
     `a sector with fewer than ${MIN_SAMPLE} values gets no percentiles`)
 
   // A row with no sector has no peers and must not crash the pass.
   assert.doesNotThrow(() =>
-    sectorPercentiles([{ symbol: 'X', sector: null, trailing_pe: 5 }], [leaf]))
+    sectorPercentiles([{ symbol: 'X', sector: null, profit_margin: 5 }], [leaf]))
+}
+
+/* Shading direction.
+ *
+ * Sector shading states that one end of a measure is better, so it may only be
+ * applied where that is actually agreed. These assertions pin the metrics that
+ * must stay unshaded: for dividend yield in particular, the top quintile of
+ * this universe returned 7.7% a year over ten years against the bottom
+ * quintile's 24.2%, while falling less far in a drawdown — a trade-off, not a
+ * ranking.
+ */
+for (const id of ['dividend_yield', 'trailing_pe', 'forward_pe', 'price_to_book',
+                  'price_to_sales', 'ev_to_ebitda', 'beta', 'market_cap_usd',
+                  'index_weight', 'pct_from_52w_high']) {
+  assert.equal(LEAF_BY_ID[id].goodWhen, undefined,
+    `"${id}" has no agreed better end and must never be shaded`)
+}
+
+// Metrics that do have one, in both directions.
+for (const id of ['profit_margin', 'return_on_equity', 'return_10y',
+                  'revenue_cagr_5y', 'net_income_cagr_5y', 'max_drawdown']) {
+  assert.equal(LEAF_BY_ID[id].goodWhen, 'high', `"${id}" is better when higher`)
+}
+for (const id of ['debt_to_equity', 'volatility_5y']) {
+  assert.equal(LEAF_BY_ID[id].goodWhen, 'low', `"${id}" is better when lower`)
+}
+
+// Max drawdown is stored negative, so "less bad" is the higher number.
+assert.equal(LEAF_BY_ID.max_drawdown.goodWhen, 'high',
+  'a -30% drawdown is better than -70%, so higher is the better end')
+
+// goodness() inverts for lower-is-better, leaving the median neutral either way.
+const close = (a, b) => Math.abs(a - b) < 1e-9
+assert.ok(close(goodness(0.9, 'high'), 0.9))
+assert.ok(close(goodness(0.9, 'low'), 0.1), 'a high debt ratio is the worse end')
+assert.equal(goodness(0.5, 'high'), goodness(0.5, 'low'), 'the median is neutral')
+
+// Only directional columns get percentiles at all — nothing to shade otherwise.
+{
+  const rows = [...Array(12).keys()].map((i) => ({
+    symbol: `Y${i}`, sector: 'Tech', dividend_yield: i / 100, profit_margin: i / 100,
+  }))
+  const pct = sectorPercentiles(rows, [LEAF_BY_ID.dividend_yield, LEAF_BY_ID.profit_margin])
+  assert.equal(pct.get('Y0').dividend_yield, undefined,
+    'dividend yield must produce no percentile to shade with')
+  assert.equal(pct.get('Y0').profit_margin, 0, 'profit margin still ranks')
 }
 
 console.log('PASS - medians ignore gaps, price carries no aggregate, '
   + 'percentiles are bounded and tie-stable.')
+console.log('PASS - shading only where a better end is agreed; '
+  + 'yield, P/E and beta stay unshaded.')

@@ -15,12 +15,11 @@
   --row-hover: #f4f4f2;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
   --head-h: 31px;
-  /* Sector-shading hues. Deliberately NOT --pos/--neg: those already mean
-     positive and negative return, and one colour must not carry two meanings
-     in the same row. */
-  --heat-below-rgb: 47 110 190;
-  --heat-above-rgb: 178 106 20;
-  --heat-strength: 0.26;
+  /* Sector-shading hues, aligned with --pos/--neg so green always means the
+     better end and red the worse one, whichever encoding is on screen. */
+  --heat-good-rgb: 26 127 75;
+  --heat-poor-rgb: 180 69 58;
+  --heat-strength: 0.28;
   color-scheme: light;
 }
 
@@ -38,9 +37,9 @@
   --warn: #d3a55f;
   --row-hover: #23272b;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
-  --heat-below-rgb: 108 164 235;
-  --heat-above-rgb: 226 170 90;
-  --heat-strength: 0.30;
+  --heat-good-rgb: 95 196 139;
+  --heat-poor-rgb: 226 121 108;
+  --heat-strength: 0.26;
   color-scheme: dark;
 }
 
@@ -291,9 +290,15 @@ tfoot td .empty { color: var(--muted); }
 
 /* ------------------------------------------------------- sector shading --- */
 /* Intensity comes from --heat, set per cell as the distance from the sector
-   median. Colour marks position, never quality. */
-td.heat-below { background: rgb(var(--heat-below-rgb) / calc(var(--heat) * var(--heat-strength))); }
-td.heat-above { background: rgb(var(--heat-above-rgb) / calc(var(--heat) * var(--heat-strength))); }
+   median. Only columns with an agreed better end are shaded at all. */
+td.heat-good { background: rgb(var(--heat-good-rgb) / calc(var(--heat) * var(--heat-strength))); }
+td.heat-poor { background: rgb(var(--heat-poor-rgb) / calc(var(--heat) * var(--heat-strength))); }
+td.heat { cursor: help; }
+
+/* With shading on, the background carries the judgement, so the signed text
+   colours stand down. Otherwise a shallow drawdown reads as a red number on a
+   green cell — two colour languages contradicting each other in one place. */
+table.shaded tbody .pos, table.shaded tbody .neg { color: var(--text); }
 /* Row hover highlights the cells that carry no shading, so hovering never
    destroys the comparison the shading is there to make. */
 tbody tr:hover td:not(.heat) { background: var(--row-hover); }
@@ -313,8 +318,8 @@ tbody tr:hover td:not(.heat) { background: var(--row-hover); }
 .heat-swatch {
   width: 26px; height: 9px; border-radius: 2px;
   background: linear-gradient(to right,
-    rgb(var(--heat-below-rgb) / 0.85), transparent 50%,
-    rgb(var(--heat-above-rgb) / 0.85));
+    rgb(var(--heat-poor-rgb) / 0.85), transparent 50%,
+    rgb(var(--heat-good-rgb) / 0.85));
 }
 
 /* ------------------------------------------------------- peer comparison -- */

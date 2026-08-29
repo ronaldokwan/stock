@@ -101,11 +101,13 @@ export function Filters({
         className={heat ? 'heat-toggle active' : 'heat-toggle'}
         onClick={() => onHeat(!heat)}
         aria-pressed={heat}
-        title={'Shade each cell by where it sits within its own sector. '
-          + 'Blue is below the sector median, amber above — a position, not a verdict.'}
+        title={'Shade each cell green or red by where it ranks against its own '
+          + 'sector. Only measures with an agreed better end are shaded: '
+          + 'valuation multiples, dividend yield and beta are left plain, '
+          + 'because whether high or low is better depends on what you want.'}
       >
         <span className="heat-swatch" aria-hidden />
-        Sector shading
+        Rank vs sector
       </button>
 
       <div className="filters-right">

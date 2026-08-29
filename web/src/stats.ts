@@ -117,6 +117,17 @@ export function sectorMedians(rows: Stock[], leaves: Leaf[]): Record<string, Rec
 }
 
 /**
+ * How favourable a value is within its sector, 0 (worst) to 1 (best).
+ *
+ * Separated from the percentile itself so the raw position stays available for
+ * the tooltip: the reader is told where the value sits, and the colour tells
+ * them what that means for this particular metric.
+ */
+export function goodness(pct: number, goodWhen: 'high' | 'low'): number {
+  return goodWhen === 'low' ? 1 - pct : pct
+}
+
+/**
  * Where a value sits within its sector, 0 (lowest) to 1 (highest).
  *
  * Percentile rather than distance from the median: a z-score computed on a
@@ -129,7 +140,10 @@ export function sectorPercentiles(
   leaves: Leaf[],
 ): Map<string, Record<string, number>> {
   const out = new Map<string, Record<string, number>>()
-  const ranked = leaves.filter((leaf) => aggregateFor(leaf) !== 'none')
+  // Only columns with an agreed better end are ranked. The valuation multiples,
+  // dividend yield and beta have none, so they are never shaded and there is
+  // nothing to compute for them.
+  const ranked = leaves.filter((leaf) => leaf.goodWhen != null)
 
   for (const [, members] of groupBySector(rows)) {
     for (const leaf of ranked) {

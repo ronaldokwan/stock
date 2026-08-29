@@ -339,12 +339,44 @@ Three details are load-bearing rather than cosmetic:
 |---|---|
 | `price` carries no statistic | The column holds 29 listing currencies at once. An average of KRW, JPY and USD is meaningless, and would look entirely plausible sitting under the table. |
 | Fewer than `MIN_SAMPLE` (10) values shows a dash | A median of five is not a benchmark. Filtering to one row shows dashes, not that row's own values relabelled as medians. |
-| Shading is blue/amber, not green/red | Green and red already mean positive and negative return in the same rows. One colour must not carry two meanings. Shading marks position within a sector, never quality — a low P/E is not "good". |
+| Only measures with an agreed better end are shaded | Shading states that one end is preferable. Where that is contested the column is left plain rather than asserting a view. |
 
-Shading ranks by percentile within the sector rather than distance from the
+Shading ranks by percentile within the sector rather than by distance from the
 median: a z-score on a distribution whose maximum is 4368 tells the reader
-nothing, while a percentile is outlier-immune. Every figure discloses the `n`
-it was computed from, since coverage runs from 100% to 35% by column.
+nothing, while a percentile is outlier-immune. Every figure discloses the `n` it
+was computed from, since coverage runs from 100% to 35% by column.
+
+#### What is not shaded, and why
+
+A column is shaded only if its `Leaf` declares `goodWhen`. Growth, returns,
+margin, ROE and drawdown do; debt/equity and volatility declare `'low'` and
+invert. Every valuation multiple, dividend yield, beta, market cap and distance
+from the 52-week high declare nothing and stay plain.
+
+Dividend yield is the case that sets the rule. High yield looks obviously
+desirable, but yield is dividend over *price*, so a falling price raises it.
+Splitting this universe by yield quintile:
+
+| | Low-yield Q1 (0.46%) | High-yield Q5 (5.00%) |
+|---|---|---|
+| 10-year return p.a. | 24.2% | 7.7% |
+| Revenue growth 5y | 11.8% | 5.3% |
+| Max drawdown | −72.6% | −63.8% |
+
+The high-yield quintile returned under a third as much over ten years and grew
+more slowly, but fell less far. That is a trade-off between income with
+stability and total return — not a ranking — and which end is "better" depends
+on what the reader wants. The same argument applies to a low P/E, which is
+either cheap or a value trap, and to beta, which is unwelcome or desirable
+depending on the holder.
+
+Because the direction is declarative, changing a view is a one-line edit to that
+column's `goodWhen`, and the test suite pins the current set both ways.
+
+While shading is on, the green/red *text* colours on signed values stand down
+(`table.shaded` in `styles.css`). Otherwise a shallow drawdown renders a red
+number on a green cell — two colour languages contradicting each other in one
+place.
 
 The column registry has a single definition for the same reason the row schema
 does. `src/columns.def.ts` declares each column once — its group, format and

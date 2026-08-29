@@ -10,9 +10,9 @@ import {
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { columns, formatNumber } from './columns'
-import { LEAF_BY_ID, SPINE } from './columns.def'
+import { LEAF_BY_ID, SPINE, type Leaf } from './columns.def'
 import { EMPTY } from './format'
-import { aggregateFor, MIN_SAMPLE, type Summary } from './stats'
+import { aggregateFor, goodness, MIN_SAMPLE, type Summary } from './stats'
 import type { Stock } from './types'
 
 interface Props {
@@ -62,19 +62,33 @@ function classes(...names: (string | false | undefined)[]): string | undefined {
   return out || undefined
 }
 
+function ordinal(n: number): string {
+  const rest = n % 100
+  if (rest >= 11 && rest <= 13) return `${n}th`
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`
+}
+
 /**
- * Background shade for one cell, from its percentile within its own sector.
+ * Background shade for one cell, from where it ranks within its own sector.
  *
- * Deliberately not the green/red the signed columns already use: those mean
- * "positive/negative return", and reusing them here would make one colour carry
- * two meanings in the same row. Blue reads below the sector median and amber
- * above it, with no implication that either is good.
+ * Only columns that declare `goodWhen` are shaded, so the colour always means
+ * the same thing: green is the better end of this metric, red the worse. A
+ * column whose direction is contested — every valuation multiple, dividend
+ * yield, beta — declares nothing and is left alone, because shading it would
+ * assert a preference the data does not support.
  */
-function heatClass(pct: number | undefined): { className?: string; intensity?: number } {
-  if (pct == null) return {}
-  const intensity = Math.abs(pct - 0.5) * 2
-  if (intensity < 0.02) return {}
-  return { className: pct < 0.5 ? 'heat heat-below' : 'heat heat-above', intensity }
+function heatClass(pct: number | undefined, leaf: Leaf | undefined) {
+  if (pct == null || !leaf?.goodWhen) return {}
+  const good = goodness(pct, leaf.goodWhen)
+  const intensity = Math.abs(good - 0.5) * 2
+  if (intensity < 0.04) return {}
+  const better = leaf.goodWhen === 'high' ? 'Higher' : 'Lower'
+  return {
+    className: good >= 0.5 ? 'heat heat-good' : 'heat heat-poor',
+    intensity,
+    title: `${ordinal(Math.round(pct * 100))} percentile within its sector. `
+      + `${better} is the better end of this measure.`,
+  }
 }
 
 export function StockTable({
@@ -126,7 +140,7 @@ export function StockTable({
 
   return (
     <div className="table-scroll" ref={scrollRef}>
-      <table>
+      <table className={heat ? 'shaded' : undefined}>
         <thead>
           {table.getHeaderGroups().map((group) => (
             <tr key={group.id}>
@@ -216,7 +230,8 @@ export function StockTable({
                   const meta = cell.column.columnDef.meta as { align?: string } | undefined
                   const left = pinnedLeft(cell.column)
                   const shade = heat
-                    ? heatClass(percentiles.get(row.original.symbol)?.[cell.column.id])
+                    ? heatClass(percentiles.get(row.original.symbol)?.[cell.column.id],
+                                LEAF_BY_ID[cell.column.id])
                     : {}
                   return (
                     <td
@@ -230,6 +245,7 @@ export function StockTable({
                       style={shade.intensity === undefined
                         ? { left }
                         : { left, ['--heat' as string]: shade.intensity.toFixed(2) }}
+                      title={shade.title}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>

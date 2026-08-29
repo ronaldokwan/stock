@@ -88,6 +88,19 @@ export interface Leaf {
   derivedFlag?: keyof Stock
   /** Overrides the kind's default benchmark statistic. */
   aggregate?: Aggregate
+  /**
+   * Which end of this metric is the better outcome, for sector shading.
+   *
+   * Left unset wherever the direction is genuinely contested, and those columns
+   * are then never shaded. That is most of the valuation block: a low P/E is
+   * either cheap or a value trap, and the data cannot say which. Dividend yield
+   * is the clearest case — in this universe the top yield quintile returned
+   * 7.7% a year over ten years against the bottom quintile's 24.2%, while
+   * falling less far in a drawdown. That is a trade-off, not a ranking, and
+   * colouring it green or red would assert a preference the reader has not
+   * expressed.
+   */
+  goodWhen?: 'high' | 'low'
   size?: number
 }
 
@@ -130,47 +143,47 @@ export const LEAVES: Leaf[] = [
   { id: 'ev_to_ebitda', header: 'EV/EBITDA', group: 'Valuation', kind: 'ratio', size: 100 },
   { id: 'dividend_yield', header: 'Div yield', group: 'Valuation', kind: 'percent', digits: 2, size: 96 },
 
-  { id: 'return_1y', header: '1Y', group: 'Total return p.a.', kind: 'percent', signed: true,
+  { id: 'return_1y', header: '1Y', group: 'Total return p.a.', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Total shareholder return over 1 year.' },
-  { id: 'return_3y', header: '3Y', group: 'Total return p.a.', kind: 'percent', signed: true,
+  { id: 'return_3y', header: '3Y', group: 'Total return p.a.', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised total shareholder return over 3 years.' },
-  { id: 'return_5y', header: '5Y', group: 'Total return p.a.', kind: 'percent', signed: true,
+  { id: 'return_5y', header: '5Y', group: 'Total return p.a.', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised total shareholder return over 5 years.' },
-  { id: 'return_10y', header: '10Y', group: 'Total return p.a.', kind: 'percent', signed: true,
+  { id: 'return_10y', header: '10Y', group: 'Total return p.a.', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised total shareholder return over 10 years.' },
-  { id: 'return_20y', header: '20Y', group: 'Total return p.a.', kind: 'percent', signed: true,
+  { id: 'return_20y', header: '20Y', group: 'Total return p.a.', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised total shareholder return over 20 years. The only 20-year '
       + 'measure available: no free source provides 20 years of global fundamentals.' },
 
-  { id: 'revenue_cagr_3y', header: '3Y', group: 'Revenue growth', kind: 'percent', signed: true,
+  { id: 'revenue_cagr_3y', header: '3Y', group: 'Revenue growth', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised revenue growth over 3 years.' },
-  { id: 'revenue_cagr_5y', header: '5Y', group: 'Revenue growth', kind: 'percent', signed: true,
+  { id: 'revenue_cagr_5y', header: '5Y', group: 'Revenue growth', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised revenue growth over 5 years.' },
-  { id: 'revenue_cagr_10y', header: '10Y', group: 'Revenue growth', kind: 'percent', signed: true,
+  { id: 'revenue_cagr_10y', header: '10Y', group: 'Revenue growth', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised revenue growth over 10 years. SEC and IFRS filers only.' },
-  { id: 'revenue_growth_ttm', header: 'TTM', group: 'Revenue growth', kind: 'percent', signed: true,
+  { id: 'revenue_growth_ttm', header: 'TTM', group: 'Revenue growth', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Most recent trailing-twelve-month revenue growth. A single period, not annualised.' },
 
-  { id: 'net_income_cagr_3y', header: '3Y', group: 'Profit growth', kind: 'percent', signed: true,
+  { id: 'net_income_cagr_3y', header: '3Y', group: 'Profit growth', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised net income growth over 3 years. Net income rather than EPS, '
       + 'so share splits do not distort it.' },
-  { id: 'net_income_cagr_5y', header: '5Y', group: 'Profit growth', kind: 'percent', signed: true,
+  { id: 'net_income_cagr_5y', header: '5Y', group: 'Profit growth', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised net income growth over 5 years.' },
-  { id: 'net_income_cagr_10y', header: '10Y', group: 'Profit growth', kind: 'percent', signed: true,
+  { id: 'net_income_cagr_10y', header: '10Y', group: 'Profit growth', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Annualised net income growth over 10 years. SEC and IFRS filers only.' },
-  { id: 'earnings_growth_ttm', header: 'TTM', group: 'Profit growth', kind: 'percent', signed: true,
+  { id: 'earnings_growth_ttm', header: 'TTM', group: 'Profit growth', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Most recent trailing-twelve-month earnings growth. A single period, not annualised.' },
 
-  { id: 'profit_margin', header: 'Margin', group: 'Quality', kind: 'percent', signed: true },
-  { id: 'return_on_equity', header: 'ROE', group: 'Quality', kind: 'percent', signed: true },
-  { id: 'debt_to_equity', header: 'D/E', group: 'Quality', kind: 'ratio' },
+  { id: 'profit_margin', header: 'Margin', group: 'Quality', kind: 'percent', signed: true, goodWhen: 'high' },
+  { id: 'return_on_equity', header: 'ROE', group: 'Quality', kind: 'percent', signed: true, goodWhen: 'high' },
+  { id: 'debt_to_equity', header: 'D/E', group: 'Quality', kind: 'ratio', goodWhen: 'low' },
 
   { id: 'beta', header: 'Beta', group: 'Risk', kind: 'ratio', digits: 2,
     help: 'Sensitivity to the market. Grouped with risk rather than quality '
       + 'because it measures volatility, not profitability.' },
-  { id: 'volatility_5y', header: 'Vol 5Y', group: 'Risk', kind: 'percent',
+  { id: 'volatility_5y', header: 'Vol 5Y', group: 'Risk', kind: 'percent', goodWhen: 'low',
     help: 'Annualised volatility of monthly returns over 5 years.' },
-  { id: 'max_drawdown', header: 'Max DD', group: 'Risk', kind: 'percent', signed: true,
+  { id: 'max_drawdown', header: 'Max DD', group: 'Risk', kind: 'percent', signed: true, goodWhen: 'high',
     help: 'Largest peak-to-trough decline across the full price history.' },
   { id: 'pct_from_52w_high', header: 'From high', group: 'Risk', kind: 'percent', signed: true, size: 96,
     help: 'Distance below the 52-week high.' },
