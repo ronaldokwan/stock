@@ -313,6 +313,39 @@ The frontend sort test is not incidental: nulls must sort last in both
 directions. Were they treated as zero, a company with no 20-year history would
 rank alongside one that genuinely returned 0% per annum.
 
+### Benchmarks
+
+An absolute number is hard to judge, so the table carries a summary row, the
+detail drawer shows sector medians beside each metric, and an optional shading
+mode colours each cell by where it sits within its own sector. All three are
+computed in the browser from the published JSON; nothing is precomputed.
+
+The statistic is a **median, never a mean**. These distributions are
+right-skewed with unbounded tails — trailing P/E reaches 4368, price/sales 3329
+— so the mean sits 1.8-3.1x above the median across the valuation columns.
+EV/EBITDA settles it on its own: loss-making companies drag its mean to -9.4,
+against a median of 14.5. An "average EV/EBITDA" of -9.4x would be worse than
+showing nothing.
+
+The comparison is **sector-relative**, because a universe-wide figure inverts
+the answer. Sector medians span 3-8x — P/E from Energy's 14.2 to Technology's
+45.0, P/B from Real Estate's 1.1 to Technology's 8.7. Samsung's P/E of 38.1
+reads 69% expensive against the universe median of 22.6, and cheap against the
+Technology median it actually competes with.
+
+Three details are load-bearing rather than cosmetic:
+
+| Rule | Reason |
+|---|---|
+| `price` carries no statistic | The column holds 29 listing currencies at once. An average of KRW, JPY and USD is meaningless, and would look entirely plausible sitting under the table. |
+| Fewer than `MIN_SAMPLE` (10) values shows a dash | A median of five is not a benchmark. Filtering to one row shows dashes, not that row's own values relabelled as medians. |
+| Shading is blue/amber, not green/red | Green and red already mean positive and negative return in the same rows. One colour must not carry two meanings. Shading marks position within a sector, never quality — a low P/E is not "good". |
+
+Shading ranks by percentile within the sector rather than distance from the
+median: a z-score on a distribution whose maximum is 4368 tells the reader
+nothing, while a percentile is outlier-immune. Every figure discloses the `n`
+it was computed from, since coverage runs from 100% to 35% by column.
+
 The column registry has a single definition for the same reason the row schema
 does. `src/columns.def.ts` declares each column once — its group, format and
 width — and the presets are expressed as group membership rather than as
@@ -360,7 +393,8 @@ pipeline/
   run.py            CLI orchestrator
 web/
   src/types.ts      generated; do not edit
-  src/columns.def.ts  the column taxonomy: groups, presets, widths
+  src/columns.def.ts  the column taxonomy: groups, presets, widths, aggregates
+  src/stats.ts      medians, sector benchmarks and percentiles
   src/columns.tsx   TanStack definitions built from it, formatting, null handling
   src/StockTable.tsx  virtualised sortable table, two-tier headers, pinned spine
   public/data/      pipeline output (committed)

@@ -41,6 +41,30 @@ export const SIZE_BY_KIND: Record<Kind, number> = {
   weight: 92,
 }
 
+/** The benchmark statistic a column publishes in the summary row. */
+export type Aggregate = 'median' | 'total' | 'none'
+
+/**
+ * Default aggregate per kind.
+ *
+ * `price` is the one that matters: the column holds 29 different listing
+ * currencies, so an average of it is a meaningless number that would look
+ * entirely plausible sitting under the table. `money` and `weight` take a sum
+ * because the total market cap and the universe's share of the index are the
+ * informative figures there, not a typical value. `int` covers rank, which is
+ * ordinal.
+ */
+export const AGGREGATE_BY_KIND: Record<Kind, Aggregate> = {
+  percent: 'median',
+  ratio: 'median',
+  money: 'total',
+  weight: 'total',
+  price: 'none',
+  int: 'none',
+  text: 'none',
+  source: 'none',
+}
+
 export interface Leaf {
   id: keyof Stock
   /** Short label. The group banner above it supplies the context. */
@@ -62,6 +86,8 @@ export interface Leaf {
    * silently mixed in one column.
    */
   derivedFlag?: keyof Stock
+  /** Overrides the kind's default benchmark statistic. */
+  aggregate?: Aggregate
   size?: number
 }
 
@@ -160,6 +186,10 @@ export const LEAVES: Leaf[] = [
 
 /** Every column id, in display order. */
 export const ALL_COLUMN_IDS: string[] = LEAVES.map((leaf) => leaf.id)
+
+/** Leaf lookup, for consumers that hold a column id rather than the leaf. */
+export const LEAF_BY_ID: Record<string, Leaf> =
+  Object.fromEntries(LEAVES.map((leaf) => [leaf.id, leaf]))
 
 /** Group banners, in display order, excluding the unbannered spine. */
 export const GROUPS: string[] =

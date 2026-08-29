@@ -124,3 +124,95 @@ for (const id of SPINE) {
 
 console.log(`PASS - ${ALL_COLUMN_IDS.length} columns, ${GROUPS.length} groups, ` +
   `${Object.keys(PRESETS).length} presets resolve cleanly.`)
+
+/* ------------------------------------------------------------------------ */
+/* Benchmark statistics.
+ *
+ * The rule from the sort test carries into the aggregate: a missing value is
+ * not a zero. A median that silently counted nulls as zeros would drag every
+ * low-coverage column toward zero and read as a real, defensible number.
+ */
+import { AGGREGATE_BY_KIND, SIZE_BY_KIND } from '../src/columns.def.ts'
+import { MIN_SAMPLE, median, total, sectorPercentiles } from '../src/stats.ts'
+
+const enough = (extra = []) => [...Array(MIN_SAMPLE).fill(1), ...extra]
+
+// Odd and even counts.
+assert.equal(median([...Array(11).keys()]).value, 5, 'odd count takes the middle')
+assert.equal(median([...Array(10).keys()]).value, 4.5, 'even count averages the pair')
+
+// Nulls are excluded, never zeroed. With 10 ones and two nulls the median is 1;
+// were the nulls counted as zeros it would fall to 0.5.
+const withGaps = median([...Array(10).fill(1), null, undefined], 10)
+assert.equal(withGaps.value, 1, 'nulls must not be treated as zero')
+assert.equal(withGaps.n, 10, 'n counts only the values that were present')
+
+// Order does not matter, and ties are handled.
+assert.equal(median([5, 1, 3, 2, 4, 9, 8, 7, 6, 0]).value, 4.5)
+assert.equal(median(Array(12).fill(7)).value, 7, 'all-equal values median to that value')
+
+// Too few to be honest.
+assert.equal(median([1, 2, 3]), null, `fewer than ${MIN_SAMPLE} values yields no median`)
+assert.equal(median([1, 2, 3], 3).value, 2, 'the threshold is overridable')
+assert.equal(median([]), null)
+assert.equal(median([null, null], 1), null, 'a column of nulls has no median')
+
+// Totals ignore gaps too.
+assert.equal(total([1, 2, null, 3]).value, 6)
+assert.equal(total([1, 2, null, 3]).n, 3)
+assert.equal(total([]), null)
+
+// The column that must never be averaged: price mixes 29 listing currencies.
+assert.equal(AGGREGATE_BY_KIND.price, 'none',
+  'price holds many currencies at once and must carry no aggregate')
+assert.equal(AGGREGATE_BY_KIND.int, 'none', 'rank is ordinal')
+assert.equal(AGGREGATE_BY_KIND.text, 'none')
+assert.equal(AGGREGATE_BY_KIND.source, 'none')
+assert.equal(AGGREGATE_BY_KIND.money, 'total', 'market cap sums rather than medians')
+assert.equal(AGGREGATE_BY_KIND.ratio, 'median')
+assert.equal(AGGREGATE_BY_KIND.percent, 'median')
+
+// Every kind is covered by both per-kind maps, so a new kind cannot slip
+// through with an undefined width or an accidental aggregate.
+for (const kind of Object.keys(SIZE_BY_KIND)) {
+  assert.ok(AGGREGATE_BY_KIND[kind] !== undefined,
+    `kind "${kind}" has no aggregate declared`)
+}
+
+// Percentiles: bounded, monotonic, and stable across ties.
+{
+  const leaf = { id: 'trailing_pe', kind: 'ratio', group: 'Valuation', header: 'P/E' }
+  const rows = [...Array(12).keys()].map((i) => ({
+    symbol: `S${i}`, sector: 'Tech', trailing_pe: i,
+  }))
+  const pct = sectorPercentiles(rows, [leaf])
+  const values = rows.map((r) => pct.get(r.symbol).trailing_pe)
+
+  assert.equal(values[0], 0, 'lowest value sits at 0')
+  assert.equal(values[11], 1, 'highest value sits at 1')
+  for (const v of values) assert.ok(v >= 0 && v <= 1, 'percentiles stay in range')
+  for (let i = 1; i < values.length; i += 1) {
+    assert.ok(values[i] > values[i - 1], 'percentile rises with value')
+  }
+
+  const tied = [...Array(12).keys()].map((i) => ({
+    symbol: `T${i}`, sector: 'Tech', trailing_pe: i < 6 ? 10 : 20,
+  }))
+  const tpct = sectorPercentiles(tied, [leaf])
+  assert.equal(tpct.get('T0').trailing_pe, tpct.get('T5').trailing_pe,
+    'tied values must share a percentile')
+
+  // A sector too thin to median is also too thin to rank.
+  const thin = [...Array(4).keys()].map((i) => ({
+    symbol: `U${i}`, sector: 'Tiny', trailing_pe: i,
+  }))
+  assert.equal(sectorPercentiles(thin, [leaf]).size, 0,
+    `a sector with fewer than ${MIN_SAMPLE} values gets no percentiles`)
+
+  // A row with no sector has no peers and must not crash the pass.
+  assert.doesNotThrow(() =>
+    sectorPercentiles([{ symbol: 'X', sector: null, trailing_pe: 5 }], [leaf]))
+}
+
+console.log('PASS - medians ignore gaps, price carries no aggregate, '
+  + 'percentiles are bounded and tie-stable.')

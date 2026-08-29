@@ -15,6 +15,12 @@
   --row-hover: #f4f4f2;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
   --head-h: 31px;
+  /* Sector-shading hues. Deliberately NOT --pos/--neg: those already mean
+     positive and negative return, and one colour must not carry two meanings
+     in the same row. */
+  --heat-below-rgb: 47 110 190;
+  --heat-above-rgb: 178 106 20;
+  --heat-strength: 0.26;
   color-scheme: light;
 }
 
@@ -32,6 +38,9 @@
   --warn: #d3a55f;
   --row-hover: #23272b;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  --heat-below-rgb: 108 164 235;
+  --heat-above-rgb: 226 170 90;
+  --heat-strength: 0.30;
   color-scheme: dark;
 }
 
@@ -236,7 +245,6 @@ tbody td {
 }
 tbody td.right { text-align: right; }
 tbody tr { cursor: pointer; }
-tbody tr:hover td { background: var(--row-hover); }
 tbody tr.stale td:first-child { box-shadow: inset 2px 0 0 var(--warn); }
 
 /* Provenance badge: which source the growth columns for this row came from. */
@@ -262,6 +270,63 @@ tbody tr.stale td:first-child { box-shadow: inset 2px 0 0 var(--warn); }
 .rank { color: var(--muted); font-size: 12px; }
 .ticker { font-weight: 600; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
 .company { overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: 230px; vertical-align: bottom; }
+
+/* --------------------------------------------------------- summary row --- */
+/* Sticks to the bottom of the scroll box, the way a spreadsheet totals row
+   does. It lives outside the virtualiser, so the padding rows never touch it. */
+tfoot td {
+  position: sticky; bottom: 0; z-index: 12;
+  background: var(--surface);
+  border-top: 1px solid var(--border-strong);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
+tfoot td.right { text-align: right; }
+tfoot td.pinned { z-index: 16; }
+tfoot td.foot-label { color: var(--muted); font-weight: 600; }
+tfoot td .empty { color: var(--muted); }
+
+/* ------------------------------------------------------- sector shading --- */
+/* Intensity comes from --heat, set per cell as the distance from the sector
+   median. Colour marks position, never quality. */
+td.heat-below { background: rgb(var(--heat-below-rgb) / calc(var(--heat) * var(--heat-strength))); }
+td.heat-above { background: rgb(var(--heat-above-rgb) / calc(var(--heat) * var(--heat-strength))); }
+/* Row hover highlights the cells that carry no shading, so hovering never
+   destroys the comparison the shading is there to make. */
+tbody tr:hover td:not(.heat) { background: var(--row-hover); }
+
+.heat-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  font: inherit; font-size: 12px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.heat-toggle:hover { color: var(--text); }
+.heat-toggle.active { color: var(--text); border-color: var(--border-strong); }
+.heat-swatch {
+  width: 26px; height: 9px; border-radius: 2px;
+  background: linear-gradient(to right,
+    rgb(var(--heat-below-rgb) / 0.85), transparent 50%,
+    rgb(var(--heat-above-rgb) / 0.85));
+}
+
+/* ------------------------------------------------------- peer comparison -- */
+.peer {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+.peer::before { content: '· '; }
+.peer-key { font-size: 12px; margin: 0 0 4px; }
 
 .no-results, .state { padding: 60px 20px; text-align: center; color: var(--muted); }
 .state h1 { font-size: 17px; color: var(--text); }

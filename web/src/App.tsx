@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SortingState, VisibilityState } from '@tanstack/react-table'
-import { ALL_COLUMN_IDS, resolvePreset } from './columns.def'
+import { ALL_COLUMN_IDS, LEAVES, resolvePreset } from './columns.def'
 import { applyFilters, EMPTY_FILTERS, Filters, type FilterState } from './Filters'
 import { DetailDrawer } from './DetailDrawer'
 import { StockTable } from './StockTable'
 import { toCSV } from './format'
+import { sectorMedians, sectorPercentiles, summarise } from './stats'
 import type { Meta, Sparklines, Stock } from './types'
 
 const BASE = import.meta.env.BASE_URL
@@ -12,6 +13,21 @@ const BASE = import.meta.env.BASE_URL
 function visibilityFor(preset: string): VisibilityState {
   const wanted = new Set(resolvePreset(preset))
   return Object.fromEntries(ALL_COLUMN_IDS.map((id) => [id, wanted.has(id)]))
+}
+
+/** Remembered like the theme: a view preference, not data. */
+function useStored(key: string, fallback: boolean) {
+  const [value, setValue] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(key)
+      if (saved != null) return saved === 'true'
+    } catch { /* private mode or blocked storage */ }
+    return fallback
+  })
+  useEffect(() => {
+    try { localStorage.setItem(key, String(value)) } catch { /* ignore */ }
+  }, [key, value])
+  return [value, setValue] as const
 }
 
 function useTheme() {
@@ -40,6 +56,7 @@ export default function App() {
   const [sorting, setSorting] = useState<SortingState>([{ id: 'rank', desc: false }])
   const [selected, setSelected] = useState<Stock | null>(null)
   const [theme, setTheme] = useTheme()
+  const [heat, setHeat] = useStored('heat', false)
 
   const visibleRows = useRef<Stock[]>([])
   // Stable identity so the table's reporting effect does not re-fire each render.
@@ -70,6 +87,16 @@ export default function App() {
     () => (stocks ? applyFilters(stocks, filters) : []),
     [stocks, filters],
   )
+
+  // The summary row describes what is on screen, so it follows the filters.
+  // Peer comparison and shading are sector-relative and so use the full
+  // universe: a company's peers do not change because a filter is applied.
+  const summary = useMemo(() => summarise(filtered, LEAVES), [filtered])
+  const medians = useMemo(
+    () => (stocks ? sectorMedians(stocks, LEAVES) : {}), [stocks])
+  const percentiles = useMemo(
+    () => (stocks && heat ? sectorPercentiles(stocks, LEAVES) : new Map()),
+    [stocks, heat])
 
   function exportCSV() {
     const cols = resolvePreset(preset)
@@ -133,6 +160,8 @@ export default function App() {
         onPreset={setPreset}
         visibleCount={filtered.length}
         onExport={exportCSV}
+        heat={heat}
+        onHeat={setHeat}
       />
 
       <StockTable
@@ -142,11 +171,15 @@ export default function App() {
         columnVisibility={columnVisibility}
         onRowClick={setSelected}
         onVisibleRowsChange={handleVisibleRows}
+        summary={summary}
+        percentiles={percentiles}
+        heat={heat}
       />
 
       <DetailDrawer
         stock={selected}
         spark={selected ? sparks[selected.symbol] : undefined}
+        peers={selected?.sector ? medians[selected.sector] : undefined}
         onClose={() => setSelected(null)}
       />
 

@@ -9,8 +9,10 @@ import {
   type VisibilityState,
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { columns } from './columns'
-import { SPINE } from './columns.def'
+import { columns, formatNumber } from './columns'
+import { LEAF_BY_ID, SPINE } from './columns.def'
+import { EMPTY } from './format'
+import { aggregateFor, MIN_SAMPLE, type Summary } from './stats'
 import type { Stock } from './types'
 
 interface Props {
@@ -20,6 +22,11 @@ interface Props {
   columnVisibility: VisibilityState
   onRowClick: (row: Stock) => void
   onVisibleRowsChange?: (rows: Stock[]) => void
+  /** Benchmark per column, over the filtered rows. */
+  summary: Record<string, Summary | null>
+  /** Each row's percentile within its sector, keyed by symbol then column. */
+  percentiles: Map<string, Record<string, number>>
+  heat: boolean
 }
 
 const ROW_HEIGHT = 34
@@ -37,14 +44,42 @@ function pinnedLeft(column: Column<Stock, unknown>): number | undefined {
 /** The rightmost frozen column, which carries the border marking the freeze. */
 const EDGE = SPINE[SPINE.length - 1]
 
+/** The frozen column the summary row labels itself in. */
+const LABEL_COLUMN = SPINE[SPINE.length - 1]
+
+function isTextColumn(leaf: { kind: string }): boolean {
+  return leaf.kind === 'text' || leaf.kind === 'source'
+}
+
+function noStatReason(rowCount: number): string {
+  return rowCount < MIN_SAMPLE
+    ? `Only ${rowCount} row${rowCount === 1 ? '' : 's'} in view — too few for a median.`
+    : `Fewer than ${MIN_SAMPLE} rows carry this value, so no median is shown.`
+}
+
 function classes(...names: (string | false | undefined)[]): string | undefined {
   const out = names.filter(Boolean).join(' ')
   return out || undefined
 }
 
+/**
+ * Background shade for one cell, from its percentile within its own sector.
+ *
+ * Deliberately not the green/red the signed columns already use: those mean
+ * "positive/negative return", and reusing them here would make one colour carry
+ * two meanings in the same row. Blue reads below the sector median and amber
+ * above it, with no implication that either is good.
+ */
+function heatClass(pct: number | undefined): { className?: string; intensity?: number } {
+  if (pct == null) return {}
+  const intensity = Math.abs(pct - 0.5) * 2
+  if (intensity < 0.02) return {}
+  return { className: pct < 0.5 ? 'heat heat-below' : 'heat heat-above', intensity }
+}
+
 export function StockTable({
   data, sorting, onSortingChange, columnVisibility,
-  onRowClick, onVisibleRowsChange,
+  onRowClick, onVisibleRowsChange, summary, percentiles, heat,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -180,6 +215,9 @@ export function StockTable({
                 {row.getVisibleCells().map((cell) => {
                   const meta = cell.column.columnDef.meta as { align?: string } | undefined
                   const left = pinnedLeft(cell.column)
+                  const shade = heat
+                    ? heatClass(percentiles.get(row.original.symbol)?.[cell.column.id])
+                    : {}
                   return (
                     <td
                       key={cell.id}
@@ -187,8 +225,11 @@ export function StockTable({
                         meta?.align === 'right' && 'right',
                         left !== undefined && 'pinned',
                         cell.column.id === EDGE && 'edge',
+                        shade.className,
                       )}
-                      style={{ left }}
+                      style={shade.intensity === undefined
+                        ? { left }
+                        : { left, ['--heat' as string]: shade.intensity.toFixed(2) }}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
@@ -199,6 +240,66 @@ export function StockTable({
           })}
           {paddingBottom > 0 && <tr style={{ height: paddingBottom }} aria-hidden />}
         </tbody>
+        <tfoot>
+          <tr>
+            {table.getVisibleLeafColumns().map((column) => {
+              const leaf = LEAF_BY_ID[column.id]
+              const left = pinnedLeft(column)
+              const shared = {
+                className: classes(
+                  leaf && !isTextColumn(leaf) && 'right',
+                  left !== undefined && 'pinned',
+                  column.id === EDGE && 'edge',
+                ),
+                style: { left },
+              }
+
+              // The label sits in the widest frozen column, where it stays put
+              // while the numbers it describes scroll past. It says only how
+              // many rows, because the columns are not all the same statistic:
+              // most are medians, market cap and index weight are totals.
+              if (column.id === LABEL_COLUMN) {
+                return (
+                  <td
+                    key={column.id}
+                    {...shared}
+                    className={classes(shared.className, 'foot-label')}
+                    title={'Median per column, over the rows currently shown. '
+                      + 'Market cap and index weight are totals; price carries no '
+                      + 'statistic, because the column mixes listing currencies.'}
+                  >
+                    {`${data.length.toLocaleString()} row${data.length === 1 ? '' : 's'} shown`}
+                  </td>
+                )
+              }
+
+              const stat = summary[column.id]
+              if (!leaf || stat == null) {
+                return (
+                  <td key={column.id} {...shared}>
+                    {leaf && aggregateFor(leaf) !== 'none' && (
+                      <span className="empty" title={noStatReason(data.length)}>{EMPTY}</span>
+                    )}
+                  </td>
+                )
+              }
+              const kind = aggregateFor(leaf)
+              return (
+                <td
+                  key={column.id}
+                  {...shared}
+                  title={`${kind === 'total' ? 'Total' : 'Median'} of ${stat.n.toLocaleString()} `
+                    + `value${stat.n === 1 ? '' : 's'}`
+                    + (stat.n < data.length
+                      ? ` — ${(data.length - stat.n).toLocaleString()} rows have none.`
+                      : '.')}
+                >
+                  {formatNumber(leaf, stat.value)}
+                </td>
+              )
+            })}
+          </tr>
+        </tfoot>
       </table>
     </div>
   )

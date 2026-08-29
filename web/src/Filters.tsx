@@ -22,6 +22,8 @@ interface Props {
   onPreset: (name: string) => void
   visibleCount: number
   onExport: () => void
+  heat: boolean
+  onHeat: (on: boolean) => void
 }
 
 function uniqueSorted(rows: Stock[], key: 'country' | 'sector'): string[] {
@@ -29,7 +31,7 @@ function uniqueSorted(rows: Stock[], key: 'country' | 'sector'): string[] {
 }
 
 export function Filters({
-  all, filters, onChange, preset, onPreset, visibleCount, onExport,
+  all, filters, onChange, preset, onPreset, visibleCount, onExport, heat, onHeat,
 }: Props) {
   const countries = useMemo(() => uniqueSorted(all, 'country'), [all])
   const sectors = useMemo(() => uniqueSorted(all, 'sector'), [all])
@@ -94,6 +96,17 @@ export function Filters({
           </button>
         ))}
       </div>
+
+      <button
+        className={heat ? 'heat-toggle active' : 'heat-toggle'}
+        onClick={() => onHeat(!heat)}
+        aria-pressed={heat}
+        title={'Shade each cell by where it sits within its own sector. '
+          + 'Blue is below the sector median, amber above — a position, not a verdict.'}
+      >
+        <span className="heat-swatch" aria-hidden />
+        Sector shading
+      </button>
 
       <div className="filters-right">
         <span className="count">

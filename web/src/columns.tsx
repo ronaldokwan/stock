@@ -17,7 +17,11 @@ const num = (key: keyof Stock) => (row: Stock) => (row[key] ?? undefined) as num
 
 const str = (key: keyof Stock) => (row: Stock) => (row[key] ?? undefined) as string | undefined
 
-function formatNumber(leaf: Leaf, value: number): string {
+/**
+ * Render one numeric value the way its column renders it. Shared with the
+ * summary row, so a median formats exactly like the cells it summarises.
+ */
+export function formatNumber(leaf: Leaf, value: number): string {
   switch (leaf.kind) {
     case 'money': return money(value)
     case 'price': return value.toFixed(2)
