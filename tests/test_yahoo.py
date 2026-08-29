@@ -1,49 +1,11 @@
-"""Tests for the Yahoo layer's resilience machinery."""
+"""Tests for parsing Yahoo's response shapes.
+
+The caching and retry machinery this module leans on is generic and lives
+in ``fetcher``; its tests are in test_fetcher.py.
+"""
 import pandas as pd
 
-from pipeline.yahoo import _Breaker, _extract_close, _is_rate_limit
-
-
-class TestBreaker:
-    def test_trips_after_threshold_consecutive_failures(self):
-        b = _Breaker(3)
-        for _ in range(2):
-            b.record(limited=True)
-        assert not b.tripped
-        b.record(limited=True)
-        assert b.tripped
-
-    def test_a_success_resets_the_count(self):
-        b = _Breaker(3)
-        b.record(limited=True)
-        b.record(limited=True)
-        b.record(limited=False)
-        b.record(limited=True)
-        assert not b.tripped
-
-    def test_stays_tripped_once_tripped(self):
-        """Skipped tasks report no failure; that must not un-trip the breaker."""
-        b = _Breaker(2)
-        b.record(limited=True)
-        b.record(limited=True)
-        assert b.tripped
-        for _ in range(10):
-            b.record(limited=False)
-        assert b.tripped
-
-
-class TestRateLimitDetection:
-    def test_recognises_yfinance_rate_limit_error(self):
-        class YFRateLimitError(Exception):
-            pass
-        assert _is_rate_limit(YFRateLimitError("Too Many Requests. Rate limited."))
-
-    def test_recognises_http_429(self):
-        assert _is_rate_limit(Exception("HTTP 429 returned"))
-
-    def test_ignores_unrelated_errors(self):
-        assert not _is_rate_limit(ValueError("no timezone found"))
-        assert not _is_rate_limit(KeyError("Close"))
+from pipeline.yahoo import _extract_close
 
 
 class TestExtractClose:

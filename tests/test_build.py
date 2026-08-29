@@ -4,8 +4,9 @@ import json
 import pandas as pd
 import pytest
 
-from pipeline import build, schema
-from pipeline.build import _rate, _sparkline, _to_usd
+from pipeline import build, currency, schema
+from pipeline.build import _sparkline
+from pipeline.currency import as_fraction as _rate, to_usd as _to_usd
 
 
 class TestCurrencyConversion:
@@ -142,9 +143,9 @@ class TestMinorUnitGuard:
             schema._check_minor_units([self._row(bad)] * 10, self.FX)
 
     def test_kuwaiti_fils_divide_by_a_thousand(self):
-        assert build.MINOR_UNITS['KWF'] == ('KWD', 1000)
-        assert build.major_currency('KWF') == 'KWD'
-        assert build.major_currency('USD') == 'USD'
+        assert currency.MINOR_UNITS['KWF'] == ('KWD', 1000)
+        assert currency.major_currency('KWF') == 'KWD'
+        assert currency.major_currency('USD') == 'USD'
 
 
 class TestPercentQuotedRates:

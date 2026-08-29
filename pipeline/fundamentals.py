@@ -18,12 +18,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 from . import config as C
+from . import fetcher
 
 log = logging.getLogger(__name__)
 
 CIK_CACHE = C.CACHE / "company_tickers.json"
 FACTS_CACHE = C.CACHE / "sec_facts"
 FACTS_CACHE.mkdir(parents=True, exist_ok=True)
+
+# EDGAR restates rarely and the files are large; a week is plenty.
+FACTS_TTL = 7 * 86_400
 
 _ANNUAL_FRAME = re.compile(r"^CY\d{4}$")
 
@@ -90,7 +94,7 @@ def _headers() -> dict[str, str]:
 
 def load_cik_map() -> dict[str, int]:
     """Map uppercase US ticker -> CIK number."""
-    if not CIK_CACHE.exists() or (time.time() - CIK_CACHE.stat().st_mtime) > 7 * 86_400:
+    if not fetcher.fresh(CIK_CACHE, FACTS_TTL):
         _limiter.wait()
         r = requests.get(C.SEC_TICKERS_URL, headers=_headers(), timeout=60)
         r.raise_for_status()
@@ -207,7 +211,7 @@ def _is_current(series: dict[str, float]) -> bool:
 
 def _fetch_facts(symbol: str, cik: int) -> dict:
     path = FACTS_CACHE / f"{cik}.json"
-    if path.exists() and (time.time() - path.stat().st_mtime) < 7 * 86_400:
+    if fetcher.fresh(path, FACTS_TTL):
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:                            # noqa: BLE001

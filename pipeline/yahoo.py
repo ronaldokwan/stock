@@ -1,7 +1,8 @@
 """Yahoo Finance access layer: symbol probing, price history and quote fields.
 
 Everything Yahoo-specific lives here so it can be swapped wholesale (for stooq
-or a paid feed) without touching the rest of the pipeline.
+or a paid feed) without touching the rest of the pipeline. The caching, retry
+and circuit-breaker mechanics this leans on are generic and live in ``fetcher``.
 
 Yahoo is an unofficial, undocumented source that rate-limits aggressively, so
 this module is built to be *resumable* rather than fast: every symbol's data is
@@ -14,16 +15,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-import random
-import time
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
 import pandas as pd
 import yfinance as yf
 
 from . import config as C
+from . import fetcher
+from .fetcher import Breaker
 from .metrics import sanitise_prices
 
 warnings.filterwarnings("ignore")
@@ -32,51 +32,6 @@ log = logging.getLogger(__name__)
 
 INCOME_CACHE = C.CACHE / "income"
 INCOME_CACHE.mkdir(parents=True, exist_ok=True)
-
-
-class _Breaker:
-    """Stops a stage once Yahoo starts refusing, instead of burning the queue.
-
-    Latching matters: once tripped, the in-flight tasks that get skipped report
-    no failure, and a non-latching counter would reset on them and let the stage
-    start hammering Yahoo again.
-    """
-
-    def __init__(self, threshold: int):
-        self.threshold = threshold
-        self._consecutive = 0
-        self._tripped = False
-        self._lock = Lock()
-
-    @property
-    def tripped(self) -> bool:
-        return self._tripped
-
-    def record(self, *, limited: bool) -> None:
-        with self._lock:
-            if self._tripped:
-                return
-            self._consecutive = self._consecutive + 1 if limited else 0
-            if self._consecutive >= self.threshold:
-                self._tripped = True
-
-
-def _is_rate_limit(exc: Exception) -> bool:
-    text = f"{type(exc).__name__} {exc}".lower()
-    return "ratelimit" in text or "too many requests" in text or "429" in text
-
-
-def _safe(symbol: str) -> str:
-    return symbol.replace("/", "_").replace("\\", "_")
-
-
-def _fresh(path, ttl: float) -> bool:
-    return path.exists() and (time.time() - path.stat().st_mtime) < ttl
-
-
-def _chunks(seq, size):
-    for i in range(0, len(seq), size):
-        yield seq[i:i + size]
 
 
 def _extract_close(df: pd.DataFrame, symbols: list[str]) -> dict[str, pd.Series]:
@@ -100,36 +55,7 @@ def _extract_close(df: pd.DataFrame, symbols: list[str]) -> dict[str, pd.Series]
     return out
 
 
-# --------------------------------------------------------------------- probe
-def probe(symbols: list[str]) -> set[str]:
-    """Return the subset of ``symbols`` Yahoo actually serves data for.
-
-    Only called for genuinely ambiguous tickers (mostly EUR listings that could
-    sit on any of a dozen exchanges). Unambiguous symbols skip this entirely and
-    are validated for free by the history fetch.
-    """
-    valid: set[str] = set()
-    if not symbols:
-        return valid
-    total = len(symbols)
-    for n, chunk in enumerate(_chunks(symbols, C.YF_CHUNK), 1):
-        for attempt in range(C.YF_RETRIES):
-            try:
-                df = yf.download(chunk, period="5d", interval="1d",
-                                 threads=C.YF_THREADS, progress=False, auto_adjust=True)
-                valid |= set(_extract_close(df, chunk))
-                break
-            except Exception as e:                   # noqa: BLE001
-                if _is_rate_limit(e) and attempt < C.YF_RETRIES - 1:
-                    _backoff(attempt)
-                    continue
-                log.warning("probe chunk %d failed: %s", n, str(e)[:110])
-                break
-        log.info("  probed %d/%d (%d valid)", min(n * C.YF_CHUNK, total), total, len(valid))
-        _pause()
-    return valid
-
-
+# ------------------------------------------------------------------- session
 _session_reset = False
 _reset_lock = Lock()
 
@@ -171,17 +97,33 @@ def reset_session() -> bool:
     return False
 
 
-def _backoff(attempt: int) -> None:
-    # First 429 of a run is far more often a stale crumb than a real block.
-    if attempt == 0:
-        reset_session()
-    delay = C.YF_BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 1.5)
-    log.info("    rate limited, backing off %.1fs", delay)
-    time.sleep(delay)
+def _download(chunk: list[str], **kwargs) -> dict[str, pd.Series]:
+    """One bulk download, reduced to ``{symbol: close series}``."""
+    df = yf.download(chunk, threads=C.YF_THREADS, progress=False,
+                     auto_adjust=True, **kwargs)
+    return _extract_close(df, chunk)
 
 
-def _pause() -> None:
-    time.sleep(C.YF_PAUSE + random.uniform(0, C.YF_PAUSE))
+# --------------------------------------------------------------------- probe
+def probe(symbols: list[str]) -> set[str]:
+    """Return the subset of ``symbols`` Yahoo actually serves data for.
+
+    Only called for genuinely ambiguous tickers (mostly EUR listings that could
+    sit on any of a dozen exchanges). Unambiguous symbols skip this entirely and
+    are validated for free by the history fetch.
+    """
+    valid: set[str] = set()
+    if not symbols:
+        return valid
+
+    breaker = Breaker(C.YF_BREAKER_CHUNKS)
+    for got in fetcher.chunked(
+            symbols, C.YF_CHUNK,
+            lambda chunk: _download(chunk, period="5d", interval="1d"),
+            breaker=breaker, label="probed", on_rate_limit=reset_session):
+        valid |= set(got or {})
+    log.info("  probe: %d/%d valid", len(valid), len(symbols))
+    return valid
 
 
 # ------------------------------------------------------------------- history
@@ -190,63 +132,32 @@ def fetch_history(symbols: list[str], max_new: int | None = None) -> dict[str, p
 
     Monthly bars are all the CAGR maths needs and are ~10x smaller than daily.
     """
-    cached: dict[str, pd.Series] = {}
-    missing: list[str] = []
-    for s in symbols:
-        path = C.HISTORY_CACHE / f"{_safe(s)}.parquet"
-        if _fresh(path, C.HISTORY_TTL):
-            try:
-                cached[s] = pd.read_parquet(path)["close"]
-                continue
-            except Exception:                        # noqa: BLE001
-                pass
-        missing.append(s)
+    cached, missing = fetcher.partition(
+        symbols, C.HISTORY_CACHE, C.HISTORY_TTL, suffix=".parquet",
+        load=lambda path: pd.read_parquet(path)["close"])
 
     if max_new is not None:
         missing = missing[:max_new]
     log.info("history: %d cached, %d to fetch", len(cached), len(missing))
 
-    breaker = _Breaker(C.YF_BREAKER_CHUNKS)
-    for n, chunk in enumerate(_chunks(missing, C.YF_CHUNK), 1):
-        if breaker.tripped:
-            log.warning("history: rate limited repeatedly, stopping early "
-                        "(%d symbols left for the next run)",
-                        len(missing) - (n - 1) * C.YF_CHUNK)
-            break
-        got = {}
-        for attempt in range(C.YF_RETRIES):
-            try:
-                df = yf.download(chunk, period="max", interval="1mo",
-                                 threads=C.YF_THREADS, progress=False, auto_adjust=True)
-                got = _extract_close(df, chunk)
-                break
-            except Exception as e:                   # noqa: BLE001
-                if _is_rate_limit(e) and attempt < C.YF_RETRIES - 1:
-                    _backoff(attempt)
-                    continue
-                log.warning("history chunk %d failed: %s", n, str(e)[:110])
-                break
-
-        breaker.record(limited=not got)
-        for s, series in got.items():
-            cached[s] = series
-            try:
-                series.rename("close").to_frame().to_parquet(
-                    C.HISTORY_CACHE / f"{_safe(s)}.parquet")
-            except Exception:                        # noqa: BLE001
-                pass
-        log.info("  history %d/%d fetched (%d total)",
-                 min(n * C.YF_CHUNK, len(missing)), len(missing), len(cached))
-        _pause()
+    breaker = Breaker(C.YF_BREAKER_CHUNKS)
+    for got in fetcher.chunked(
+            missing, C.YF_CHUNK,
+            lambda chunk: _download(chunk, period="max", interval="1mo"),
+            breaker=breaker, label="history", on_rate_limit=reset_session):
+        for symbol, series in (got or {}).items():
+            cached[symbol] = series
+            fetcher.store(symbol, series, C.HISTORY_CACHE, suffix=".parquet",
+                          dump=lambda p, v: v.rename("close").to_frame().to_parquet(p))
 
     # Cleaned on the way out rather than before caching, so the Parquet files
     # stay a faithful copy of what Yahoo served and a change to the filter takes
     # effect on the next run instead of needing the whole cache re-fetched.
     cleaned, dropped = {}, 0
-    for s, series in cached.items():
+    for symbol, series in cached.items():
         out = sanitise_prices(series)
         dropped += len(series.dropna()) - len(out)
-        cleaned[s] = out
+        cleaned[symbol] = out
     if dropped:
         log.info("history: dropped %d impossible price bars "
                  "(non-positive or isolated 100x)", dropped)
@@ -260,17 +171,7 @@ def fetch_income_history(symbols: list[str], max_new: int | None = None) -> dict
     Net income rather than EPS for the same split-adjustment reason as the SEC
     path -- see the note on NET_INCOME_TAGS in fundamentals.py.
     """
-    out: dict[str, dict] = {}
-    missing: list[str] = []
-    for s in symbols:
-        path = INCOME_CACHE / f"{_safe(s)}.json"
-        if _fresh(path, C.INCOME_TTL):
-            try:
-                out[s] = json.loads(path.read_text(encoding="utf-8"))
-                continue
-            except Exception:                        # noqa: BLE001
-                pass
-        missing.append(s)
+    out, missing = fetcher.partition(symbols, INCOME_CACHE, C.INCOME_TTL)
 
     if max_new is not None:
         missing = missing[:max_new]
@@ -278,39 +179,26 @@ def fetch_income_history(symbols: list[str], max_new: int | None = None) -> dict
     if not missing:
         return out
 
-    breaker = _Breaker(C.YF_BREAKER_QUOTES)
-
     def one(symbol: str):
-        if breaker.tripped:
-            return symbol, None
         try:
             stmt = yf.Ticker(symbol).income_stmt
             if stmt is None or stmt.empty:
-                return symbol, {}
+                return {}
             rows = {str(i).strip().lower(): i for i in stmt.index}
             res: dict[str, dict] = {}
             for key, label in (("total revenue", "revenue"), ("net income", "net_income")):
                 if key in rows:
                     series = stmt.loc[rows[key]].dropna()
                     res[label] = {str(k.year): float(v) for k, v in series.items()}
-            return symbol, res
+            return res
         except Exception as e:                       # noqa: BLE001
-            if _is_rate_limit(e):
-                return symbol, None
-            return symbol, {}
+            return None if fetcher.is_rate_limit(e) else {}
 
-    with ThreadPoolExecutor(max_workers=C.YF_QUOTE_THREADS) as pool:
-        futures = {pool.submit(one, s): s for s in missing}
-        for fut in as_completed(futures):
-            sym, data = fut.result()
-            breaker.record(limited=data is None)
-            if data:
-                out[sym] = data
-                try:
-                    (INCOME_CACHE / f"{_safe(sym)}.json").write_text(
-                        json.dumps(data), encoding="utf-8")
-                except Exception:                    # noqa: BLE001
-                    pass
+    breaker = Breaker(C.YF_BREAKER_QUOTES)
+    for symbol, data in fetcher.each(missing, one, breaker=breaker,
+                                     workers=C.YF_QUOTE_THREADS, label="income"):
+        out[symbol] = data
+        fetcher.store(symbol, data, INCOME_CACHE)
 
     log.info("income statements: %d symbols have data", len(out))
     return out
@@ -329,9 +217,7 @@ def fetch_fx(currencies: list[str]) -> dict[str, float]:
     if not pairs:
         return rates
     try:
-        df = yf.download(list(pairs.values()), period="5d", interval="1d",
-                         threads=C.YF_THREADS, progress=False, auto_adjust=True)
-        closes = _extract_close(df, list(pairs.values()))
+        closes = _download(list(pairs.values()), period="5d", interval="1d")
         for cur, sym in pairs.items():
             series = closes.get(sym)
             if series is not None and not series.empty:

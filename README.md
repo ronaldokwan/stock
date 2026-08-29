@@ -1,236 +1,313 @@
 # Global Top 1000 Stocks
 
-A sortable screener of the ~1000 largest publicly traded companies worldwide —
-market cap, P/E, multi-year growth, quality and risk metrics — built entirely
-from free data sources and hosted for free on GitHub Pages.
+A sortable screener of the ~1,000 largest publicly traded companies worldwide,
+covering market capitalisation, valuation multiples, multi-year growth, quality
+and risk metrics.
 
-No server, no database, no API keys. A Python pipeline writes a static JSON
-file; a React table reads it.
+The project is built entirely on free, public data sources and requires no
+server, database or API keys: a Python pipeline produces static JSON, and a
+React table renders it. Both halves are deployed from GitHub Actions to GitHub
+Pages.
 
----
+## Contents
 
-## What the data actually covers
+- [Data coverage and limitations](#data-coverage-and-limitations)
+- [Data sources](#data-sources)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Data quality controls](#data-quality-controls)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Architecture](#architecture)
+- [Licence and fair use](#licence-and-fair-use)
 
-This is the part worth reading before trusting any number on the page.
+## Data coverage and limitations
+
+Coverage varies by metric, and the limits are inherent to the free sources
+rather than to the implementation:
 
 | Metric | 10 years | 20 years | Coverage |
 |---|---|---|---|
-| Share-price total return (CAGR) | yes | yes | ~all 1000 — Yahoo history reaches back to the 1980s |
-| Revenue / net-income growth | yes | no | SEC & IFRS filers only (roughly half the universe) |
-| Revenue / net-income growth (3–5y) | yes | — | ~all 1000, via Yahoo's income statements |
+| Share-price total return (CAGR) | Yes | Yes | ~all 1,000; Yahoo history reaches back to the 1980s |
+| Revenue / net-income growth | Yes | No | SEC and IFRS filers only, roughly half the universe |
+| Revenue / net-income growth (3–5y) | Yes | — | ~all 1,000, via Yahoo income statements |
 
-**There is no free source for 20 years of global fundamentals.** SEC XBRL
-structured data begins around 2009, and covers only companies that file with the
-SEC. So the 20-year column is *share-price return*, and the fundamental-growth
-columns stop at 10 years. Where a value does not exist it renders as `—`, never
-as zero — hover any dash and the table tells you why it is missing.
+No free source provides 20 years of global fundamentals. SEC XBRL structured
+data begins around 2009 and covers only SEC filers, so the 20-year column
+reports share-price return, and fundamental-growth columns stop at 10 years.
 
-Two correctness details that are easy to get wrong and are handled here:
+Missing values render as an em dash rather than zero, and each dash carries a
+tooltip explaining why the value is unavailable.
 
-- **Growth uses net income, not EPS.** XBRL reports EPS as-reported, unadjusted
-  for splits, so an EPS growth rate spanning Apple's 2020 4:1 split or Alphabet's
-  2022 20:1 split comes out *negative*. Net income is split-proof.
-- **Revenue is merged across XBRL tags.** Filers switched tags when ASC 606 took
-  effect in 2018, so no single tag spans the full history. Reading only one tag
-  silently loses a decade for companies like Apple and Microsoft.
+### Correctness details
 
-Delisted issuers (Toyota dropped its US ADR in 2024) leave real but stale figures
-on EDGAR; anything whose latest year is more than two years old is discarded
-rather than presented as current.
+Two calculations are easy to get wrong and are handled explicitly:
 
-### Duplicate listings are collapsed
+- **Growth is computed from net income, not EPS.** XBRL reports EPS
+  as-reported, unadjusted for splits, so an EPS growth rate spanning Apple's
+  2020 4:1 split or Alphabet's 2022 20:1 split resolves negative. Net income is
+  unaffected by splits.
+- **Revenue is merged across XBRL tags.** Filers changed tags when ASC 606 took
+  effect in 2018, so no single tag spans the full history. Reading one tag alone
+  drops roughly a decade for issuers such as Apple and Microsoft.
 
-The index holds several companies more than once: TSMC as both its Taiwan line
-and a US ADR, Alphabet as two share classes, Rio Tinto as a dual-listed pair.
-Yahoo reports *whole-company* market cap on each of those lines, so leaving them
-all in would double-count the company and let it occupy two ranks at once.
+Delisted issuers retain real but stale figures on EDGAR — Toyota withdrew its US
+ADR in 2024, for example. Any series whose most recent year is more than two
+years old is discarded rather than presented as current.
 
-`universe.deduplicate` collapses them, preferring an ordinary share over a
-depositary receipt and the larger listing otherwise. The dropped tickers are
-kept on the surviving row as `also_listed_as`, so nothing silently disappears.
+### Duplicate listings
 
-Matching is deliberately conservative, because a careless name match gets real
-cases wrong. `9984.T` and `9434.T` look alike but are SoftBank **Group** and
-SoftBank **Corp** — two different companies — and both are correctly kept.
+The source index lists several companies more than once: TSMC as both its Taiwan
+line and a US ADR, Alphabet as two share classes, Rio Tinto as a dual-listed
+pair. Yahoo reports whole-company market capitalisation on each line, so
+retaining all of them would double-count the company and allow it to occupy two
+ranks simultaneously.
 
----
+`universe.deduplicate` collapses these, preferring an ordinary share over a
+depositary receipt and the larger listing otherwise. Dropped tickers are retained
+on the surviving row in the `also_listed_as` field.
+
+Matching is deliberately conservative, as name similarity produces false
+positives: `9984.T` and `9434.T` are SoftBank Group and SoftBank Corp
+respectively — separate companies — and both are correctly retained.
 
 ## Data sources
 
 | Purpose | Source | Notes |
 |---|---|---|
-| Universe | [SPDR Portfolio MSCI Global Stock Market ETF (SPGM)](https://www.ssga.com/us/en/institutional/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spgm.xlsx) holdings | Official State Street file, no auth. ~2900 global equities with index weights. The top 1000 covers ~94% of global market cap |
-| Prices, ratios, classification | Yahoo Finance via `yfinance` | Unofficial and rate-limited — see below |
-| Fundamentals (US GAAP + IFRS) | [SEC EDGAR XBRL `companyfacts`](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) | Free, official, no API key. Covers foreign 20-F filers too |
-| FX to USD | Yahoo FX pairs | Market cap stored in both local currency and USD |
+| Universe | [SPDR Portfolio MSCI Global Stock Market ETF (SPGM)](https://www.ssga.com/us/en/institutional/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spgm.xlsx) holdings | Official State Street file, no authentication. ~2,900 global equities with index weights; the top 1,000 covers ~94% of global market capitalisation |
+| Prices, ratios, classification | Yahoo Finance via `yfinance` | Unofficial and rate-limited; see [Rate limiting](#rate-limiting) |
+| Fundamentals (US GAAP and IFRS) | [SEC EDGAR XBRL `companyfacts`](https://www.sec.gov/search-filings/edgar-application-programming-interfaces) | Free, official, no API key; includes foreign 20-F filers |
+| FX to USD | Yahoo FX pairs | Market capitalisation is stored in both local currency and USD |
 
-The iShares ACWI holdings file is *not* used: its download endpoint returns an
-HTML interstitial rather than the CSV. SSGA publishes an equivalent file openly.
+The iShares ACWI holdings file is not used: its download endpoint returns an HTML
+interstitial rather than CSV. SSGA publishes an equivalent file openly.
 
----
+## Requirements
 
-## Setup
+- Python 3.11 or later
+- Node.js 20 or later (Vite 7 and React 19)
+
+## Installation
 
 ```bash
 python -m venv .venv
-.venv/Scripts/activate        # Windows;  source .venv/bin/activate elsewhere
-pip install -r requirements.txt
+source .venv/Scripts/activate   # Git Bash on Windows
+.venv\Scripts\activate.bat      # cmd / PowerShell
+source .venv/bin/activate       # macOS / Linux
 
+pip install -r requirements.txt
 cd web && npm install && cd ..
 ```
 
-### Set your SEC contact (required for fundamentals)
+Virtual environment activation applies only to the shell it is run in, indicated
+by a `(.venv)` prefix in the prompt. Without it, `python` on Windows commonly
+resolves to the Windows Store stub and the pipeline fails with
+`ModuleNotFoundError: No module named 'numpy'`.
 
-The SEC requires a User-Agent naming a real contact. There is nothing to sign up
-for -- it is a header string, not a key -- but without it you get a 403 and a
-~10 minute IP block.
+The interpreter may also be invoked by path, which requires no activation:
 
-An unset variable now **aborts the run** rather than quietly publishing with the
-10-year revenue and profit columns blank. To publish without them deliberately,
-pass `--skip-sec`.
+```bash
+.venv/Scripts/python.exe -m pipeline.run     # Windows
+.venv/bin/python -m pipeline.run             # macOS / Linux
+```
+
+Re-running `python -m venv .venv` will not repair a broken activation: Windows
+cannot overwrite `python.exe` while the environment exists, and the command fails
+with `[Errno 13] Permission denied`. Remove `.venv` first to rebuild it.
+
+## Configuration
+
+### SEC contact string
+
+SEC EDGAR requires a `User-Agent` header identifying a real contact. This is a
+header value rather than a credential — there is no registration — but requests
+without one receive HTTP 403 and a roughly 10-minute IP block.
 
 ```bash
 export SEC_USER_AGENT="Your Name your@email.com"
 ```
 
-For GitHub Actions, add this as a repository **variable** named `SEC_USER_AGENT`
-(Settings → Secrets and variables → Actions → Variables).
-
----
-
-## Running it
+The variable applies to the current shell only. Add it to your shell profile to
+persist it, or set it per invocation:
 
 ```bash
-python -m pipeline.run                 # full run, resumes from cache
-python -m pipeline.run --limit 25      # fast smoke test (~30 seconds)
-python -m pipeline.run --max-new 300   # cap fresh fetches this run
-python -m pipeline.run --skip-sec      # prices only
-
-cd web && npm run dev                  # http://localhost:5173
+SEC_USER_AGENT="Your Name your@email.com" python -m pipeline.run
 ```
 
-A cold run takes roughly 15–25 minutes, most of it waiting politely between
-Yahoo requests. Everything is cached per symbol under `data/cache/`, so a run
-that gets cut short can simply be run again — it picks up where it stopped.
+If the variable is unset, the run aborts rather than publishing with the 10-year
+revenue and profit columns empty. Pass `--skip-sec` to omit those columns
+deliberately.
 
-### Why quotes are fetched in two tiers
+For GitHub Actions, add `SEC_USER_AGENT` as a repository variable under
+Settings → Secrets and variables → Actions → Variables.
 
-Yahoo's endpoints differ enormously in cost, and getting this wrong is what
-rate-limits the pipeline:
+### Tuning
 
-- **Batch quotes** (`v7/finance/quote`) return market cap, P/E, P/B, price,
-  currency, exchange and region for **50 symbols in one request** — about 20
-  requests for the entire universe. Everything the main table needs comes from
-  here, so the site is fully functional on this tier alone.
+Pipeline constants are defined in `pipeline/config.py`, including the universe
+size (1,000), per-source cache TTLs, request concurrency, retry and backoff
+settings, and the publish thresholds described under
+[Data quality controls](#data-quality-controls).
+
+## Usage
+
+With the virtual environment active, or substituting `.venv/Scripts/python.exe`
+for `python`:
+
+```bash
+python -m pipeline.run                  # full run, resumes from cache
+python -m pipeline.run --limit 25       # smoke test, approximately 30 seconds
+python -m pipeline.run --max-new 300    # cap fresh fetches for this run
+python -m pipeline.run --profile-budget 400   # widen the profile backlog
+python -m pipeline.run --skip-sec       # prices only
+python -m pipeline.run --refresh-holdings     # re-download the SSGA file
+```
+
+To serve the frontend locally against the generated data:
+
+```bash
+cd web && npm run dev                   # http://localhost:5173
+```
+
+A cold run takes approximately 15–25 minutes, the majority of which is the
+enforced delay between Yahoo requests. All responses are cached per symbol under
+`data/cache/`, so an interrupted run can be repeated and resumes from where it
+stopped.
+
+### Two-tier quote fetching
+
+Yahoo's endpoints differ substantially in cost per symbol, and the pipeline
+treats them differently:
+
+- **Batch quotes** (`v7/finance/quote`) return market capitalisation, P/E, P/B,
+  price, currency, exchange and region for 50 symbols per request —
+  approximately 20 requests for the entire universe. The main table is fully
+  populated from this tier alone.
 - **Profiles** (`.info`) are the only source of sector, industry, margins, ROE,
-  debt/equity and beta, but cost several requests *per symbol*. So they are
+  debt/equity and beta, but cost several requests per symbol. They are therefore
   fetched best-effort, capped at `PROFILE_BUDGET` (200) symbols per run and
-  cached for a month. A nightly schedule fills all 1000 within about a week, and
-  a failure here never blocks a publish — those columns just show `—` meanwhile.
+  cached for a month. A nightly schedule completes the universe in about a week,
+  and a failure at this tier never blocks a publish; the affected columns show an
+  em dash in the interim.
 
-Use `--profile-budget N` to change how much of that backlog a run works through.
+### Rate limiting
 
-### When Yahoo starts returning 429
-
-`yfinance` is unofficial and rate-limits aggressively. In practice a persistent
-stream of 429s is usually a **stale session crumb, not an IP block** — the
-pipeline detects this and clears yfinance's cache automatically on the first
-rate-limit of a run. To do it by hand:
+`yfinance` is an unofficial client and is rate-limited aggressively. A sustained
+stream of HTTP 429 responses usually indicates a stale session crumb rather than
+an IP block. The pipeline detects this and clears the yfinance cache on the first
+rate-limited request of a run. To clear it manually:
 
 ```bash
 rm -rf ~/AppData/Local/py-yfinance     # Windows
 rm -rf ~/.cache/py-yfinance            # macOS / Linux
 ```
 
----
+## Data quality controls
 
-## How it is kept honest
+The pipeline is designed to fail rather than publish a degraded dataset. When
+validation fails, previously published data is left untouched, so the site
+becomes stale rather than incorrect.
 
-The pipeline refuses to publish a degraded dataset. `pipeline/schema.py` aborts
-the run if fewer than 950 rows were built, if more than 15% are missing market
-cap, or if more than 30% are missing a P/E. On abort, the previously published
-data is left exactly as it was, so the site goes *stale* rather than *wrong*.
+`pipeline/schema.py` aborts the run if fewer than 950 rows were built, if more
+than 15% are missing market capitalisation, or if more than 30% are missing a
+trailing P/E. Three further checks target errors that remain plausible-looking in
+the output and so cannot be caught by inspection:
 
-Three checks target errors that a reader could never spot, because the output
-still looks entirely reasonable:
+| Check | Failure it prevents |
+|---|---|
+| Rank order | Rows are selected by index weight but must be ranked by market capitalisation. Weight is free-float adjusted, so the orders differ materially — publishing weight order placed SpaceX at rank 338 with the seventh-largest market capitalisation globally. Validation requires a dense 1..N sequence in descending order of market capitalisation. |
+| Rate units | Yahoo returns `dividendYield` and `debtToEquity` as percentages, while margins, returns and ROE are fractions. All published rates are fractions; mixing conventions rendered NVIDIA's 0.44% dividend yield as 44%. Validation fails if a source changes convention. |
+| Minor units | Market capitalisation for pence, agorot and fils-quoted listings is reconstructed from price × shares, independently of the conversion under test. |
 
-- **Rank order.** Rows are *selected* by index weight and must be *ranked* by
-  market cap. Weight is free-float adjusted, so the two orders differ a lot --
-  publishing weight order put SpaceX at rank 338 with the seventh largest market
-  cap on the planet. Validation requires a dense 1..N in descending cap order.
-- **Rate units.** Yahoo returns `dividendYield` and `debtToEquity` as
-  percentages while margins, returns and ROE come back as fractions. Everything
-  published here is a fraction; mixing the two rendered NVIDIA's 0.44% dividend
-  as 44%. Validation fails if a source switches convention.
-- **Minor units.** Pence/agorot/fils market caps are reconstructed from
-  price x shares independently of the conversion under test.
+Price history is filtered before any metric reads it. Yahoo's adjusted closes
+can be negative on long histories, where decades of dividend adjustments are
+applied to a small early price; one such bar produced a reported maximum
+drawdown of −747%. A small number of tickers also carry individual bars quoted in
+the wrong unit, which produced an annualised volatility of 537% for one issuer. A
+bar is dropped only when it is non-positive, or when it diverges sharply from
+both neighbouring bars while those neighbours agree with each other — so a
+genuine crash, which persists, is retained.
 
-Price history is scrubbed before any metric reads it. Yahoo's adjusted closes go
-*negative* on some long histories (decades of dividends adjusted off a small
-early price), which reported a -747% max drawdown for Acciona, and a few tickers
-carry one bar quoted in the wrong unit, which put 3i's volatility at 537%. A bar
-is dropped only if it is non-positive, or far from *both* neighbours while those
-neighbours agree with each other -- a genuine crash persists and is left alone.
+Separately, a field that previously held a valid value and now resolves to null
+retains the earlier value and is flagged `stale`, so a single failed fetch cannot
+blank a column.
 
-Separately, a field that had a good value and now resolves to null keeps its
-previous value and is flagged `stale`, so one bad fetch cannot blank a column.
-
----
-
-## Tests
+## Testing
 
 ```bash
-python -m pytest tests/ -q      # CAGR maths, ticker mapping, SEC extraction
-cd web && npm test              # sorting: missing values must sort last
+python -m pytest tests/ -q      # metrics, ticker mapping, SEC extraction,
+                                # cache and retry machinery, publish guards
+cd web && npm test              # sort ordering of missing values
 ```
 
-The sorting test is not incidental. Nulls must fall to the bottom in **both**
-sort directions — if they sorted as zero, a company with no 20-year history
-would rank alongside one that genuinely returned 0% a year.
-
----
+The frontend sort test is not incidental: nulls must sort last in both
+directions. Were they treated as zero, a company with no 20-year history would
+rank alongside one that genuinely returned 0% per annum.
 
 ## Deployment
 
 Two GitHub Actions workflows:
 
-- **`update-data.yml`** — weekday cron (06:20 UTC) plus manual dispatch. Restores
-  the symbol cache, runs the pipeline, and commits the refreshed JSON. On failure
-  it opens an issue instead of publishing anything.
-- **`deploy.yml`** — builds the Vite app and publishes to GitHub Pages.
+- **`update-data.yml`** — weekday cron (06:20 UTC) and manual dispatch. Restores
+  the symbol cache, runs the pipeline and commits the refreshed JSON. On failure
+  it opens an issue rather than publishing.
+- **`deploy.yml`** — builds the Vite application and publishes to GitHub Pages.
 
-Keep the repository **public** so Actions minutes stay free; a private repo would
-consume its 2000 min/month allowance in roughly two months at this cadence.
+Enable Pages under Settings → Pages → Source → GitHub Actions.
 
-> A push made with `GITHUB_TOKEN` deliberately cannot trigger another workflow,
-> so `deploy.yml` also listens for `workflow_run` on the data workflow. Without
-> that, refreshed data would be committed but never reach the site.
+The repository should remain public so that Actions minutes are unmetered; at
+this cadence a private repository would exhaust its 2,000 minute monthly
+allowance in approximately two months.
 
-To enable: Settings → Pages → Source → **GitHub Actions**.
+> A push made with `GITHUB_TOKEN` cannot trigger another workflow. `deploy.yml`
+> therefore also listens for `workflow_run` on the data workflow; without it,
+> refreshed data would be committed but never published.
 
----
-
-## Project layout
+## Architecture
 
 ```
 pipeline/
   universe.py       SSGA holdings -> top 1000 + Yahoo ticker resolution
   exchange_map.py   currency -> candidate Yahoo suffixes
+  fetcher.py        disk cache and retry policy, shared by every remote source
   yahoo.py          price history, income statements, FX
-  quotes.py         batched quotes + best-effort profile enrichment
-  fundamentals.py   SEC EDGAR XBRL, US GAAP + IFRS
-  metrics.py        CAGR / drawdown / volatility — pure, unit-tested
-  schema.py         row model + publish guard rails
+  quotes.py         batched quotes and best-effort profile enrichment
+  fundamentals.py   SEC EDGAR XBRL, US GAAP and IFRS
+  metrics.py        CAGR, drawdown, volatility, price filtering (pure functions)
+  currency.py       minor units (pence, agorot, fils) and USD conversion
+  schema.py         row model and publish guard rails
   build.py          merge -> stocks.json / stocks.csv / meta.json
+  emit_types.py     schema.Stock -> web/src/types.ts
   run.py            CLI orchestrator
 web/
+  src/types.ts      generated; do not edit
   src/columns.tsx   column definitions, formatting, null handling
   src/StockTable.tsx  virtualised sortable table
   public/data/      pipeline output (committed)
 ```
 
+Two boundaries are load-bearing:
+
+**Transport is separated from source.** Price history, income statements, batch
+quotes, profiles and SEC facts share one workflow: check a per-symbol cache,
+fetch what is missing in chunks or across a small thread pool, retry throttled
+requests, abandon a stage the source is clearly refusing, and write each success
+back to disk. That logic lives once in `fetcher.py`. The source modules retain
+only what is specific to their source — endpoints, field names and response
+parsing.
+
+**The row schema has a single definition.** `web/src/types.ts` is generated from
+`schema.Stock`, and `tests/test_types.py` fails if it is out of date. Regenerate
+after any schema change:
+
+```bash
+python -m pipeline.emit_types
+```
+
 ## Licence and fair use
 
-Yahoo Finance data is for personal, non-commercial use. SSGA and SEC data are
-freely redistributable. This project is not affiliated with any of them, and
-nothing here is investment advice.
+Yahoo Finance data is licensed for personal, non-commercial use. SSGA and SEC
+data are freely redistributable. This project is not affiliated with any of these
+providers, and nothing here constitutes investment advice.

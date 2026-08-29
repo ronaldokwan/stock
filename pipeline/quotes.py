@@ -15,17 +15,15 @@ Split into two tiers, because Yahoo's endpoints differ enormously in cost:
 """
 from __future__ import annotations
 
-import json
 import logging
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
 
 import yfinance as yf
 from yfinance.data import YfData
 
 from . import config as C
-from .yahoo import _Breaker, _fresh, _is_rate_limit, _pause, _safe, reset_session
+from . import fetcher
+from .fetcher import Breaker
+from .yahoo import reset_session
 
 log = logging.getLogger(__name__)
 
@@ -68,25 +66,10 @@ REGION_NAMES = {
 }
 
 
-def _chunks(seq, size):
-    for i in range(0, len(seq), size):
-        yield seq[i:i + size]
-
-
 # ------------------------------------------------------------- batch quotes
 def fetch_batch(symbols: list[str], max_new: int | None = None) -> dict[str, dict]:
     """Core quote fields for every symbol, ~50 symbols per HTTP request."""
-    out: dict[str, dict] = {}
-    missing: list[str] = []
-    for s in symbols:
-        path = QUOTE_CACHE / f"{_safe(s)}.json"
-        if _fresh(path, C.QUOTE_TTL):
-            try:
-                out[s] = json.loads(path.read_text(encoding="utf-8"))
-                continue
-            except Exception:                        # noqa: BLE001
-                pass
-        missing.append(s)
+    out, missing = fetcher.partition(symbols, QUOTE_CACHE, C.QUOTE_TTL)
 
     if max_new is not None:
         missing = missing[:max_new]
@@ -96,48 +79,23 @@ def fetch_batch(symbols: list[str], max_new: int | None = None) -> dict[str, dic
         return out
 
     data = YfData()
-    breaker = _Breaker(C.YF_BREAKER_CHUNKS)
 
-    for n, chunk in enumerate(_chunks(missing, C.QUOTE_BATCH), 1):
-        if breaker.tripped:
-            log.warning("quotes: rate limited repeatedly, stopping early "
-                        "(%d symbols left for the next run)",
-                        len(missing) - (n - 1) * C.QUOTE_BATCH)
-            break
+    def one_chunk(chunk: list[str]) -> list[dict]:
+        payload = data.get_raw_json(QUOTE_URL, params={"symbols": ",".join(chunk)})
+        return (payload or {}).get("quoteResponse", {}).get("result", []) or []
 
-        results = []
-        for attempt in range(C.YF_RETRIES):
-            try:
-                payload = data.get_raw_json(QUOTE_URL,
-                                            params={"symbols": ",".join(chunk)})
-                results = (payload or {}).get("quoteResponse", {}).get("result", []) or []
-                break
-            except Exception as e:                   # noqa: BLE001
-                if _is_rate_limit(e) and attempt < C.YF_RETRIES - 1:
-                    if attempt == 0:
-                        reset_session()
-                    time.sleep(C.YF_BACKOFF_BASE * (2 ** attempt))
-                    continue
-                log.warning("quote batch %d failed: %s", n, str(e)[:110])
-                break
-
-        breaker.record(limited=not results)
-        for item in results:
-            sym = item.get("symbol")
-            if not sym:
+    breaker = Breaker(C.YF_BREAKER_CHUNKS)
+    for results in fetcher.chunked(missing, C.QUOTE_BATCH, one_chunk,
+                                   breaker=breaker, label="quotes",
+                                   on_rate_limit=reset_session):
+        for item in results or []:
+            symbol = item.get("symbol")
+            if not symbol:
                 continue
             row = {k: item.get(k) for k in _BATCH_FIELDS}
             row["country"] = REGION_NAMES.get(str(item.get("region") or "").upper())
-            out[sym] = row
-            try:
-                (QUOTE_CACHE / f"{_safe(sym)}.json").write_text(
-                    json.dumps(row), encoding="utf-8")
-            except Exception:                        # noqa: BLE001
-                pass
-
-        log.info("  quotes %d/%d fetched (%d total)",
-                 min(n * C.QUOTE_BATCH, len(missing)), len(missing), len(out))
-        _pause()
+            out[symbol] = row
+            fetcher.store(symbol, row, QUOTE_CACHE)
 
     log.info("quotes: %d symbols have data", len(out))
     return out
@@ -150,17 +108,7 @@ def fetch_profiles(symbols: list[str], max_new: int | None = None) -> dict[str, 
     Capped per run and cached for a month, so a nightly schedule fills the whole
     universe in over a week without ever tripping Yahoo's limits hard.
     """
-    out: dict[str, dict] = {}
-    missing: list[str] = []
-    for s in symbols:
-        path = PROFILE_CACHE / f"{_safe(s)}.json"
-        if _fresh(path, C.PROFILE_TTL):
-            try:
-                out[s] = json.loads(path.read_text(encoding="utf-8"))
-                continue
-            except Exception:                        # noqa: BLE001
-                pass
-        missing.append(s)
+    out, missing = fetcher.partition(symbols, PROFILE_CACHE, C.PROFILE_TTL)
 
     budget = max_new if max_new is not None else C.PROFILE_BUDGET
     missing = missing[:budget]
@@ -169,36 +117,21 @@ def fetch_profiles(symbols: list[str], max_new: int | None = None) -> dict[str, 
     if not missing:
         return out
 
-    breaker = _Breaker(C.YF_BREAKER_QUOTES)
-    lock = Lock()
-    done = 0
-
     def one(symbol: str):
-        if breaker.tripped:
-            return symbol, None
         try:
             info = yf.Ticker(symbol).info or {}
             if not info:
-                return symbol, {}
-            return symbol, {k: info.get(k) for k in _PROFILE_FIELDS}
+                return {}
+            return {k: info.get(k) for k in _PROFILE_FIELDS}
         except Exception as e:                       # noqa: BLE001
-            return symbol, (None if _is_rate_limit(e) else {})
+            return None if fetcher.is_rate_limit(e) else {}
 
-    with ThreadPoolExecutor(max_workers=C.YF_QUOTE_THREADS) as pool:
-        for fut in as_completed([pool.submit(one, s) for s in missing]):
-            sym, profile = fut.result()
-            breaker.record(limited=profile is None)
-            if profile:
-                out[sym] = profile
-                try:
-                    (PROFILE_CACHE / f"{_safe(sym)}.json").write_text(
-                        json.dumps(profile), encoding="utf-8")
-                except Exception:                    # noqa: BLE001
-                    pass
-            with lock:
-                done += 1
-                if done % 50 == 0:
-                    log.info("  profiles %d/%d", done, len(missing))
+    breaker = Breaker(C.YF_BREAKER_QUOTES)
+    for symbol, profile in fetcher.each(missing, one, breaker=breaker,
+                                        workers=C.YF_QUOTE_THREADS,
+                                        label="profiles"):
+        out[symbol] = profile
+        fetcher.store(symbol, profile, PROFILE_CACHE)
 
     if breaker.tripped:
         log.warning("profiles: rate limited, stopped early. The table still "

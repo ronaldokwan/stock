@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import logging
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from . import config as C
+from .currency import MINOR_UNITS
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +78,7 @@ class Stock(BaseModel):
 
     # provenance
     history_start: str | None = None
-    fundamentals_source: str = "none"      # sec | yahoo | none
+    fundamentals_source: Literal["sec", "yahoo", "none"] = "none"
     fundamentals_years: int = 0
     stale: bool = False
 
@@ -107,8 +110,6 @@ def _check_minor_units(rows: list[dict], fx: dict[str, float]) -> None:
     conversion under test, catches it. Rows are skipped rather than failed when
     Yahoo's share count covers only one line of a cross-listed company.
     """
-    from .build import MINOR_UNITS                      # avoids a circular import
-
     checked, bad = 0, []
     for r in rows:
         entry = MINOR_UNITS.get(str(r.get("currency")))

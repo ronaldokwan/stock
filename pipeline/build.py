@@ -1,4 +1,12 @@
-"""Stage 5: merge every source into the published dataset."""
+"""Stage 5: merge every source into the published dataset.
+
+One row is assembled from four independent sources, and each contributes a
+distinct slice: the holdings file and batch quote give identity and size, the
+price history gives returns and risk, SEC or Yahoo statements give business
+growth, and the previously published file supplies carry-over for anything this
+run failed to fetch. Those four slices are four functions, so each is testable
+on its own; ``build`` is only the loop that joins them.
+"""
 from __future__ import annotations
 
 import csv
@@ -8,6 +16,7 @@ from datetime import datetime, timezone
 
 from . import config as C
 from . import schema
+from .currency import MINOR_UNITS, as_fraction, major_currency, to_usd
 from .metrics import (annualised_vol, cagr, clean, max_drawdown, pct_from_high,
                       series_cagr)
 
@@ -22,6 +31,10 @@ SPARK_JSON = C.OUT / "sparklines.json"
 PROTECTED = ("market_cap_usd", "trailing_pe", "return_10y", "return_20y",
              "sector", "country", "name")
 
+# Re-exported: currency handling moved to its own module so ``schema`` could
+# import it without a cycle, but these names are part of build's public surface.
+__all__ = ["MINOR_UNITS", "build", "major_currency", "write"]
+
 
 def _prev_rows() -> dict[str, dict]:
     if not STOCKS_JSON.exists():
@@ -30,48 +43,6 @@ def _prev_rows() -> dict[str, dict]:
         return {r["symbol"]: r for r in json.loads(STOCKS_JSON.read_text(encoding="utf-8"))}
     except Exception:                                # noqa: BLE001
         return {}
-
-
-# Some exchanges quote PRICES in a minor unit (London in pence, Tel Aviv in
-# agorot, Kuwait in fils) while Yahoo reports MARKET CAP for the same ticker in
-# the major unit. So a market cap converts at the major-currency rate, and only
-# a price needs dividing -- applying the divisor to the cap as well is what
-# once made Shell look like a $2B company. ``schema.validate`` now checks these
-# rows end to end so that mistake cannot ship again.
-#   currency -> (major currency, minor units per major unit)
-MINOR_UNITS: dict[str, tuple[str, int]] = {
-    "GBp": ("GBP", 100), "GBX": ("GBP", 100), "ZAc": ("ZAR", 100),
-    "ILA": ("ILS", 100), "KWF": ("KWD", 1000),
-}
-
-
-def major_currency(currency) -> str:
-    """The currency a market cap quoted against ``currency`` is denominated in."""
-    cur = str(currency)
-    entry = MINOR_UNITS.get(cur)
-    return entry[0] if entry else cur
-
-
-def _rate(value):
-    """Yahoo's percent-quoted rates -> the fraction every other rate field uses.
-
-    ``dividendYield`` and ``debtToEquity`` come back as percentages (2.2 means
-    2.2%, 55.9 means 0.56x) while ``profitMargins``, ``returnOnEquity`` and the
-    returns come back as fractions. Storing both conventions in one row is what
-    made the table render NVIDIA's 0.44% dividend as 44%. Everything published
-    here is a fraction; ``schema.validate`` fails the run if a source silently
-    switches convention.
-    """
-    return None if value is None else float(value) / 100.0
-
-
-def _to_usd(value, currency, fx):
-    """Convert a local-currency market cap to USD."""
-    if value is None or not currency:
-        return None
-    cur = major_currency(currency)
-    rate = fx.get(cur) or fx.get(cur.upper())
-    return None if rate is None else float(value) * rate
 
 
 def _sparkline(series, points: int = 60):
@@ -85,6 +56,105 @@ def _sparkline(series, points: int = 60):
     return [round(float(s.iloc[int(i * step)]), 4) for i in range(points)]
 
 
+# ------------------------------------------------------------ row assembly ---
+def _identity(holding, quote: dict, rank: int, fx: dict) -> dict:
+    """Who the company is, what it is worth, and how it is valued.
+
+    Everything here comes from the holdings row and the batch quote, which is
+    the cheap tier -- so this is the part of the table that is always complete.
+    """
+    currency = quote.get("currency") or holding.get("currency")
+    market_cap = clean(quote.get("marketCap"))
+    return {
+        "symbol": holding["symbol"],
+        "name": (quote.get("longName") or quote.get("shortName")
+                 or str(holding.get("name", "")).title()),
+        "rank": rank,
+        "local_ticker": str(holding.get("local_ticker") or "") or None,
+        "sedol": str(holding.get("sedol") or "") or None,
+        # Other listings of the same company that were merged into this row.
+        "also_listed_as": list(holding.get("merged_symbols") or []),
+        "index_weight": clean(holding.get("weight")),
+        "country": quote.get("country"),
+        "sector": quote.get("sector"),
+        "industry": quote.get("industry"),
+        "exchange": quote.get("fullExchangeName") or quote.get("exchange"),
+        "currency": currency,
+        "price": clean(quote.get("regularMarketPrice")),
+        "market_cap": market_cap,
+        "market_cap_usd": clean(to_usd(market_cap, currency, fx)),
+        "shares_outstanding": clean(quote.get("sharesOutstanding")),
+        "trailing_pe": clean(quote.get("trailingPE")),
+        "forward_pe": clean(quote.get("forwardPE")),
+        "price_to_book": clean(quote.get("priceToBook")),
+        "price_to_sales": clean(quote.get("priceToSalesTrailing12Months")),
+        "ev_to_ebitda": clean(quote.get("enterpriseToEbitda")),
+        # Percent-quoted by Yahoo; everything published here is a fraction.
+        "dividend_yield": clean(as_fraction(quote.get("dividendYield"))),
+        "profit_margin": clean(quote.get("profitMargins")),
+        "return_on_equity": clean(quote.get("returnOnEquity")),
+        "debt_to_equity": clean(as_fraction(quote.get("debtToEquity"))),
+        "beta": clean(quote.get("beta")),
+        "revenue_growth_ttm": clean(quote.get("revenueGrowth")),
+        "earnings_growth_ttm": clean(quote.get("earningsGrowth")),
+        "pct_from_52w_high": clean(pct_from_high(
+            quote.get("regularMarketPrice"), quote.get("fiftyTwoWeekHigh"))),
+    }
+
+
+def _price_metrics(hist) -> dict:
+    """Annualised total return, drawdown and volatility from the price series."""
+    row = {f"return_{years}y": clean(cagr(hist, years)) if hist is not None else None
+           for years in (1, 3, 5, 10, 20)}
+    row["max_drawdown"] = clean(max_drawdown(hist)) if hist is not None else None
+    row["volatility_5y"] = clean(annualised_vol(hist)) if hist is not None else None
+    row["history_start"] = (str(hist.index[0].date())
+                            if hist is not None and len(hist) else None)
+    return row
+
+
+def _growth_metrics(facts: dict | None, statement: dict | None) -> dict:
+    """Revenue and net-income CAGRs, preferring SEC filings over Yahoo.
+
+    SEC XBRL reaches back to ~2009; Yahoo's income statements cover four or five
+    years. Both are read through the same code so the two paths cannot drift --
+    only the source and the reachable horizon differ. A 20-year fundamental CAGR
+    exists for neither, and Yahoo's four years cannot support one at all, so it
+    is null on the Yahoo path rather than computed from too short a series.
+    """
+    from_sec = bool(facts and (facts.get("revenue") or facts.get("net_income")))
+    source = facts if from_sec else (statement or {})
+    revenue = source.get("revenue") or {}
+    net_income = source.get("net_income") or {}
+
+    row = {f"revenue_cagr_{y}y": clean(series_cagr(revenue, y)) for y in (3, 5, 10)}
+    row["revenue_cagr_20y"] = clean(series_cagr(revenue, 20)) if from_sec else None
+    row.update({f"net_income_cagr_{y}y": clean(series_cagr(net_income, y))
+                for y in (3, 5, 10)})
+    row["fundamentals_source"] = ("sec" if from_sec
+                                  else "yahoo" if (revenue or net_income) else "none")
+    row["fundamentals_years"] = len(revenue or net_income)
+    return row
+
+
+def _carry_over(row: dict, prior: dict | None, quote: dict) -> dict:
+    """Restore fields from the last publish, but only when this fetch failed.
+
+    A null from a *successful* fetch is real information: a company that turns
+    lossmaking genuinely has no trailing P/E, and freezing the old one would be
+    wrong. So values are only carried over when this symbol returned nothing at
+    all this run.
+    """
+    if not prior or quote:
+        return row
+    recovered = [f for f in PROTECTED
+                 if row.get(f) is None and prior.get(f) is not None]
+    for field in recovered:
+        row[field] = prior[field]
+    row["stale"] = bool(recovered)
+    return row
+
+
 def build(universe, quotes, history, sec, income, fx):
     rows = []
     sparks = {}
@@ -92,107 +162,24 @@ def build(universe, quotes, history, sec, income, fx):
 
     for rank, (_, holding) in enumerate(universe.iterrows(), start=1):
         symbol = holding["symbol"]
-        q = quotes.get(symbol, {})
+        quote = quotes.get(symbol, {})
         hist = history.get(symbol)
 
-        currency = q.get("currency") or holding.get("currency")
-        market_cap = clean(q.get("marketCap"))
+        row = _identity(holding, quote, rank, fx)
+        row.update(_price_metrics(hist))
+        row.update(_growth_metrics(sec.get(symbol), income.get(symbol)))
+        _carry_over(row, previous.get(symbol), quote)
 
-        row = {
-            "symbol": symbol,
-            "name": (q.get("longName") or q.get("shortName")
-                     or str(holding.get("name", "")).title()),
-            "rank": rank,
-            "local_ticker": str(holding.get("local_ticker") or "") or None,
-            "sedol": str(holding.get("sedol") or "") or None,
-            # Other listings of the same company that were merged into this row.
-            "also_listed_as": list(holding.get("merged_symbols") or []),
-            "index_weight": clean(holding.get("weight")),
-            "country": q.get("country"),
-            "sector": q.get("sector"),
-            "industry": q.get("industry"),
-            "exchange": q.get("fullExchangeName") or q.get("exchange"),
-            "currency": currency,
-            "price": clean(q.get("regularMarketPrice")),
-            "market_cap": market_cap,
-            "market_cap_usd": clean(_to_usd(market_cap, currency, fx)),
-            "shares_outstanding": clean(q.get("sharesOutstanding")),
-            "trailing_pe": clean(q.get("trailingPE")),
-            "forward_pe": clean(q.get("forwardPE")),
-            "price_to_book": clean(q.get("priceToBook")),
-            "price_to_sales": clean(q.get("priceToSalesTrailing12Months")),
-            "ev_to_ebitda": clean(q.get("enterpriseToEbitda")),
-            "dividend_yield": clean(_rate(q.get("dividendYield"))),
-            "profit_margin": clean(q.get("profitMargins")),
-            "return_on_equity": clean(q.get("returnOnEquity")),
-            "debt_to_equity": clean(_rate(q.get("debtToEquity"))),
-            "beta": clean(q.get("beta")),
-            "revenue_growth_ttm": clean(q.get("revenueGrowth")),
-            "earnings_growth_ttm": clean(q.get("earningsGrowth")),
-            "pct_from_52w_high": clean(pct_from_high(
-                q.get("regularMarketPrice"), q.get("fiftyTwoWeekHigh"))),
-        }
-
-        # ---- price growth (annualised total return) ------------------------
-        for years in (1, 3, 5, 10, 20):
-            row[f"return_{years}y"] = clean(cagr(hist, years)) if hist is not None else None
-        row["max_drawdown"] = clean(max_drawdown(hist)) if hist is not None else None
-        row["volatility_5y"] = clean(annualised_vol(hist)) if hist is not None else None
-        row["history_start"] = (str(hist.index[0].date())
-                                if hist is not None and len(hist) else None)
         if hist is not None:
             sparks[symbol] = _sparkline(hist)
-
-        # ---- business growth ----------------------------------------------
-        facts = sec.get(symbol)
-        if facts and (facts.get("revenue") or facts.get("net_income")):
-            rev = facts.get("revenue") or {}
-            ni = facts.get("net_income") or {}
-            row.update({
-                "revenue_cagr_3y": clean(series_cagr(rev, 3)),
-                "revenue_cagr_5y": clean(series_cagr(rev, 5)),
-                "revenue_cagr_10y": clean(series_cagr(rev, 10)),
-                "revenue_cagr_20y": clean(series_cagr(rev, 20)),
-                "net_income_cagr_3y": clean(series_cagr(ni, 3)),
-                "net_income_cagr_5y": clean(series_cagr(ni, 5)),
-                "net_income_cagr_10y": clean(series_cagr(ni, 10)),
-                "fundamentals_source": "sec",
-                "fundamentals_years": len(rev or ni),
-            })
-        else:
-            stmt = income.get(symbol) or {}
-            rev = stmt.get("revenue") or {}
-            ni = stmt.get("net_income") or {}
-            row.update({
-                "revenue_cagr_3y": clean(series_cagr(rev, 3)),
-                "revenue_cagr_5y": clean(series_cagr(rev, 5)),
-                "revenue_cagr_10y": clean(series_cagr(rev, 10)),
-                "revenue_cagr_20y": None,
-                "net_income_cagr_3y": clean(series_cagr(ni, 3)),
-                "net_income_cagr_5y": clean(series_cagr(ni, 5)),
-                "net_income_cagr_10y": clean(series_cagr(ni, 10)),
-                "fundamentals_source": "yahoo" if (rev or ni) else "none",
-                "fundamentals_years": len(rev or ni),
-            })
-
-        # ---- carry values over only when the fetch itself failed -------------
-        # A null from a *successful* fetch is real information: a company that
-        # turns lossmaking genuinely has no trailing P/E, and freezing the old
-        # one would be wrong. So values are only carried over when this symbol
-        # returned nothing at all this run.
-        prior = previous.get(symbol)
-        if prior and not q:
-            recovered = [f for f in PROTECTED
-                         if row.get(f) is None and prior.get(f) is not None]
-            for field in recovered:
-                row[field] = prior[field]
-            row["stale"] = bool(recovered)
-
         rows.append(schema.Stock(**row).model_dump())
 
     rows = _rank_by_market_cap(rows)
+    return rows, _meta(rows, fx), sparks
 
-    meta = {
+
+def _meta(rows: list[dict], fx: dict) -> dict:
+    return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "count": len(rows),
         "universe_source": "SPDR Portfolio MSCI Global Stock Market ETF (SPGM) holdings",
@@ -206,7 +193,6 @@ def build(universe, quotes, history, sec, income, fx):
         "fx_rates": {k: round(v, 6) for k, v in sorted(fx.items())},
         "coverage": schema.coverage(rows),
     }
-    return rows, meta, sparks
 
 
 def _rank_by_market_cap(rows: list[dict]) -> list[dict]:
