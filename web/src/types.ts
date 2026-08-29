@@ -1,0 +1,70 @@
+export interface Stock {
+  symbol: string
+  name: string
+  rank: number
+  local_ticker: string | null
+  sedol: string | null
+  index_weight: number | null
+
+  country: string | null
+  sector: string | null
+  industry: string | null
+  exchange: string | null
+  currency: string | null
+
+  price: number | null
+  market_cap: number | null
+  market_cap_usd: number | null
+  shares_outstanding: number | null
+
+  trailing_pe: number | null
+  forward_pe: number | null
+  price_to_book: number | null
+  price_to_sales: number | null
+  ev_to_ebitda: number | null
+  dividend_yield: number | null
+
+  profit_margin: number | null
+  return_on_equity: number | null
+  debt_to_equity: number | null
+  beta: number | null
+
+  return_1y: number | null
+  return_3y: number | null
+  return_5y: number | null
+  return_10y: number | null
+  return_20y: number | null
+
+  revenue_cagr_3y: number | null
+  revenue_cagr_5y: number | null
+  revenue_cagr_10y: number | null
+  revenue_cagr_20y: number | null
+  net_income_cagr_3y: number | null
+  net_income_cagr_5y: number | null
+  net_income_cagr_10y: number | null
+  revenue_growth_ttm: number | null
+  earnings_growth_ttm: number | null
+
+  max_drawdown: number | null
+  volatility_5y: number | null
+  pct_from_52w_high: number | null
+
+  history_start: string | null
+  fundamentals_source: 'sec' | 'yahoo' | 'none'
+  fundamentals_years: number
+  stale: boolean
+}
+
+export interface Meta {
+  generated_at: string
+  count: number
+  universe_source: string
+  price_source: string
+  fundamentals_sources: string[]
+  fundamentals_breakdown: Record<string, number>
+  stale_rows: number
+  fx_rates: Record<string, number>
+  coverage: Record<string, number>
+}
+
+export type Sparklines = Record<string, number[]>

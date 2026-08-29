@@ -1,0 +1,50 @@
+# Manual Yahoo-symbol fixes for holdings the automatic mapper cannot resolve.
+# Populate from data/unresolved.json after a run.
+# Key by "LOCALTICKER:CURRENCY" (preferred) or just "LOCALTICKER".
+#
+# The main case is depositary receipts. The index accesses some companies only
+# through a GDR line (a USD ticker with no Yahoo coverage), so without these the
+# company would be missing from the table entirely -- and Samsung Electronics is
+# not a company a "top 1000 worldwide" list can quietly omit.
+tickers:
+  # Samsung Electronics: held as a USD GDR; map to the Korean ordinary line.
+  # (The KRW "SAMSUNG ELECTRONICS PREF" line is the preferred share, a different
+  # security, so it cannot stand in for the ordinary shares.)
+  SMSN:USD: 005930.KS
+
+  # Hon Hai Precision (Foxconn): held as a USD GDR; map to the Taiwan listing.
+  HHPD:USD: 2317.TW
+
+  # --- India -------------------------------------------------------------
+  # SSGA writes broker shorthand; the NSE symbol Yahoo wants is often longer
+  # or spelled differently, so none of these resolve by suffix guessing.
+  HDFCB:INR: HDFCBANK.NS
+  AXSB:INR: AXISBANK.NS
+  BHARTI:INR: BHARTIARTL.NS
+  TRP:INR: TORNTPHARM.NS
+  LAURUS:INR: LAURUSLABS.NS
+  KVB:INR: KARURVYSYA.NS
+  HMFC:INR: HFCL.NS
+  AACL:INR: ALKYLAMINE.NS
+  APAT:INR: APLAPOLLO.NS
+  DATAPATT:INR: DATAPATTNS.NS
+  GP:INR: GODFRYPHLP.NS
+  GRAN:INR: GRANULES.NS
+  JKBK:INR: J&KBANK.NS
+  PNBHOUSI:INR: PNBHOUSING.NS
+  TDPS:INR: TDPOWERSYS.NS
+  TTLS:INR: TTML.NS
+  VATW:INR: WABAG.NS
+  ZEN:INR: ZENTEC.NS
+
+  # --- elsewhere ---------------------------------------------------------
+  KSP:EUR: KRZ.IR            # Kingspan trades in Dublin under KRZ
+  CIMB:MYR: 1023.KL          # Bursa Malaysia uses numeric codes on Yahoo
+  "PE&OLES *:MXN": PE&OLES.MX
+
+# Holdings with no Yahoo coverage at all, confirmed by probe. Listed here so a
+# future run does not waste requests rediscovering that they cannot be mapped.
+# All three are Abu Dhabi small caps far below the top-1000 cut.
+#   BAYANAT:AED   SPACE42 PLC
+#   RAKPROP:AED   RAK PROPERTIES
+#   ALEFEDT:AED   ALEF EDUCATION HOLDING PLC
