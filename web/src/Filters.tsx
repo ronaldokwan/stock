@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { Stock } from './types'
-import { PRESETS } from './columns'
+import { PRESETS } from './columns.def'
 
 export interface FilterState {
   search: string

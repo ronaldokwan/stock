@@ -132,7 +132,7 @@ interstitial rather than CSV. SSGA publishes an equivalent file openly.
 ## Requirements
 
 - Python 3.11 or later
-- Node.js 20 or later (Vite 7 and React 19)
+- Node.js 22 or later (Vite 7 and React 19; the test suite strips TypeScript natively)
 
 ## Installation
 
@@ -283,12 +283,21 @@ blank a column.
 ```bash
 python -m pytest tests/ -q      # metrics, ticker mapping, SEC extraction,
                                 # cache and retry machinery, publish guards
-cd web && npm test              # sort ordering of missing values
+cd web && npm test              # sort ordering of missing values,
+                                # column registry and preset integrity
 ```
 
 The frontend sort test is not incidental: nulls must sort last in both
 directions. Were they treated as zero, a company with no 20-year history would
 rank alongside one that genuinely returned 0% per annum.
+
+The column registry has a single definition for the same reason the row schema
+does. `src/columns.def.ts` declares each column once — its group, format and
+width — and the presets are expressed as group membership rather than as
+hand-written id lists, so a column added to a group joins its preset
+automatically. The accompanying test rejects a preset that names a column the
+table does not define; when the two were maintained separately, such a preset
+silently hid nothing and left the previous preset's columns on screen.
 
 ## Deployment
 
@@ -329,8 +338,9 @@ pipeline/
   run.py            CLI orchestrator
 web/
   src/types.ts      generated; do not edit
-  src/columns.tsx   column definitions, formatting, null handling
-  src/StockTable.tsx  virtualised sortable table
+  src/columns.def.ts  the column taxonomy: groups, presets, widths
+  src/columns.tsx   TanStack definitions built from it, formatting, null handling
+  src/StockTable.tsx  virtualised sortable table, two-tier headers, pinned spine
   public/data/      pipeline output (committed)
 ```
 

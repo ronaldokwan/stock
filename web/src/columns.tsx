@@ -1,6 +1,7 @@
 import { createColumnHelper, type ColumnDef } from '@tanstack/react-table'
 import type { Stock } from './types'
-import { EMPTY, explainMissing, money, percent, plain, ratio } from './format'
+import { EMPTY, explainMissing, money, percent, plain, ratio, sourceLabel } from './format'
+import { isTextKind, LEAVES, NO_GROUP, SIZE_BY_KIND, type Leaf } from './columns.def'
 
 const col = createColumnHelper<Stock>()
 
@@ -14,148 +15,87 @@ const col = createColumnHelper<Stock>()
  */
 const num = (key: keyof Stock) => (row: Stock) => (row[key] ?? undefined) as number | undefined
 
-type Fmt = (v: number | null) => string
+const str = (key: keyof Stock) => (row: Stock) => (row[key] ?? undefined) as string | undefined
 
-function numericCell(key: keyof Stock, format: Fmt, opts: { signed?: boolean } = {}) {
-  return function Cell({ row }: { row: { original: Stock } }) {
-    const value = row.original[key] as number | null
-    if (value == null) {
-      return <span className="empty" title={explainMissing(row.original, key)}>{EMPTY}</span>
-    }
-    const cls = opts.signed ? (value >= 0 ? 'pos' : 'neg') : undefined
-    return <span className={cls}>{format(value)}</span>
+function formatNumber(leaf: Leaf, value: number): string {
+  switch (leaf.kind) {
+    case 'money': return money(value)
+    case 'price': return value.toFixed(2)
+    case 'percent': return percent(value, leaf.digits ?? 1)
+    case 'ratio': return ratio(value, leaf.digits ?? 1)
+    // index_weight is published as a percentage rather than a fraction, unlike
+    // every other rate in the dataset, so it is divided back down before
+    // percent() multiplies it up again. See the README's deferred note.
+    case 'weight': return percent(value / 100, leaf.digits ?? 3)
+    default: return String(value)
   }
 }
 
-function numeric(
-  key: keyof Stock,
-  header: string,
-  format: Fmt,
-  opts: { signed?: boolean; group: string; help?: string } ,
-) {
-  return col.accessor(num(key), {
-    id: key,
-    header,
-    sortUndefined: 'last',
-    sortDescFirst: true,
-    meta: { align: 'right', group: opts.group, help: opts.help },
-    cell: numericCell(key, format, opts),
-  })
+function numericCell(leaf: Leaf) {
+  return function Cell({ row }: { row: { original: Stock } }) {
+    const value = row.original[leaf.id] as number | null
+    if (value == null) {
+      return <span className="empty" title={explainMissing(row.original, leaf.id)}>{EMPTY}</span>
+    }
+    const cls = leaf.signed ? (value >= 0 ? 'pos' : 'neg') : leaf.className
+    return <span className={cls}>{formatNumber(leaf, value)}</span>
+  }
 }
 
-export const columns = [
-  col.accessor('rank', {
-    header: '#',
-    meta: { align: 'right', group: 'Identity' },
-    cell: (c) => <span className="rank">{c.getValue()}</span>,
-    size: 56,
-  }),
-  col.accessor('symbol', {
-    header: 'Ticker',
-    meta: { group: 'Identity' },
-    cell: (c) => <span className="ticker">{c.getValue()}</span>,
-    size: 100,
-  }),
-  col.accessor('name', {
-    header: 'Company',
-    meta: { group: 'Identity' },
-    cell: (c) => <span className="company">{c.getValue()}</span>,
-    size: 240,
-  }),
-  col.accessor('country', {
-    header: 'Country',
-    meta: { group: 'Identity' },
-    cell: (c) => plain(c.getValue()),
-    size: 130,
-  }),
-  col.accessor('sector', {
-    header: 'Sector',
-    meta: { group: 'Identity' },
-    cell: (c) => plain(c.getValue()),
-    size: 160,
-  }),
-  col.accessor('exchange', {
-    header: 'Exchange',
-    meta: { group: 'Identity' },
-    cell: (c) => plain(c.getValue()),
-    size: 150,
-  }),
+function textCell(leaf: Leaf) {
+  return function Cell({ row }: { row: { original: Stock } }) {
+    if (leaf.kind === 'source') {
+      const source = row.original.fundamentals_source
+      return <span className={`source source-${source}`} title={sourceLabel(source)}>{source}</span>
+    }
+    const raw = row.original[leaf.id] as string | null
+    // Company names are ellipsised by CSS, so the full name lives in a tooltip.
+    return <span className={leaf.className} title={raw ?? undefined}>{plain(raw)}</span>
+  }
+}
 
-  numeric('market_cap_usd', 'Market cap', money, { group: 'Size' }),
-  numeric('price', 'Price', (v) => (v == null ? EMPTY : v.toFixed(2)), { group: 'Size' }),
-  numeric('index_weight', 'Index wt.', (v) => percent(v == null ? null : v / 100, 3), {
-    group: 'Size',
-    help: 'Weight in the SPDR MSCI global index used to build this universe.',
-  }),
-
-  numeric('trailing_pe', 'P/E', ratio, { group: 'Valuation' }),
-  numeric('forward_pe', 'Fwd P/E', ratio, { group: 'Valuation' }),
-  numeric('price_to_book', 'P/B', ratio, { group: 'Valuation' }),
-  numeric('price_to_sales', 'P/S', ratio, { group: 'Valuation' }),
-  numeric('ev_to_ebitda', 'EV/EBITDA', ratio, { group: 'Valuation' }),
-  numeric('dividend_yield', 'Div yield', (v) => percent(v, 2), { group: 'Valuation' }),
-
-  numeric('return_1y', '1Y', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised total return over 1 year.' }),
-  numeric('return_3y', '3Y p.a.', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised total return over 3 years.' }),
-  numeric('return_5y', '5Y p.a.', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised total return over 5 years.' }),
-  numeric('return_10y', '10Y p.a.', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised total return over 10 years.' }),
-  numeric('return_20y', '20Y p.a.', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised total return over 20 years.' }),
-
-  numeric('revenue_cagr_3y', 'Rev 3Y', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised revenue growth over 3 years.' }),
-  numeric('revenue_cagr_5y', 'Rev 5Y', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised revenue growth over 5 years.' }),
-  numeric('revenue_cagr_10y', 'Rev 10Y', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised revenue growth over 10 years. SEC/IFRS filers only.' }),
-  numeric('net_income_cagr_5y', 'Profit 5Y', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised net income growth over 5 years. Net income, not EPS, so share splits do not distort it.' }),
-  numeric('net_income_cagr_10y', 'Profit 10Y', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Annualised net income growth over 10 years.' }),
-  numeric('revenue_growth_ttm', 'Rev TTM', (v) => percent(v), { signed: true, group: 'Growth',
-    help: 'Most recent trailing-twelve-month revenue growth.' }),
-
-  numeric('profit_margin', 'Margin', (v) => percent(v), { signed: true, group: 'Quality' }),
-  numeric('return_on_equity', 'ROE', (v) => percent(v), { signed: true, group: 'Quality' }),
-  numeric('debt_to_equity', 'D/E', ratio, { group: 'Quality' }),
-
-  numeric('beta', 'Beta', (v) => ratio(v, 2), { group: 'Risk' }),
-  numeric('volatility_5y', 'Vol 5Y', (v) => percent(v), { group: 'Risk',
-    help: 'Annualised volatility of monthly returns over 5 years.' }),
-  numeric('max_drawdown', 'Max DD', (v) => percent(v), { signed: true, group: 'Risk',
-    help: 'Largest peak-to-trough decline across the full price history.' }),
-  numeric('pct_from_52w_high', 'From high', (v) => percent(v), { signed: true, group: 'Risk',
-    help: 'Distance below the 52-week high.' }),
-] as ColumnDef<Stock, any>[]   // eslint-disable-line @typescript-eslint/no-explicit-any
-
-export const PRESETS: Record<string, string[]> = {
-  Overview: ['rank', 'symbol', 'name', 'country', 'sector', 'market_cap_usd',
-    'trailing_pe', 'return_1y', 'return_10y', 'return_20y', 'revenue_cagr_10y'],
-  Valuation: ['rank', 'symbol', 'name', 'market_cap_usd', 'price', 'trailing_pe',
-    'forward_pe', 'price_to_book', 'price_to_sales', 'ev_to_ebitda', 'dividend_yield'],
-  Growth: ['rank', 'symbol', 'name', 'market_cap_usd', 'return_1y', 'return_3y',
-    'return_5y', 'return_10y', 'return_20y', 'revenue_cagr_3y', 'revenue_cagr_5y',
-    'revenue_cagr_10y', 'net_income_cagr_5y', 'net_income_cagr_10y'],
-  Quality: ['rank', 'symbol', 'name', 'market_cap_usd', 'profit_margin',
-    'return_on_equity', 'debt_to_equity', 'revenue_growth_ttm', 'trailing_pe'],
-  Risk: ['rank', 'symbol', 'name', 'market_cap_usd', 'beta', 'volatility_5y',
-    'max_drawdown', 'pct_from_52w_high', 'return_10y'],
+function leafColumn(leaf: Leaf): ColumnDef<Stock, any> {  // eslint-disable-line @typescript-eslint/no-explicit-any
+  const text = isTextKind(leaf.kind)
+  return col.accessor(text ? str(leaf.id) : num(leaf.id), {
+    id: leaf.id,
+    header: leaf.header,
+    size: leaf.size ?? SIZE_BY_KIND[leaf.kind],
+    sortUndefined: 'last',
+    sortDescFirst: !text,
+    meta: { align: text ? 'left' : 'right', group: leaf.group, help: leaf.help },
+    cell: text ? textCell(leaf) : numericCell(leaf),
+  }) as ColumnDef<Stock, any>  // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
 /**
- * Every column id, for building the visibility map a preset switches between.
+ * Turn the flat leaf registry into the two-tier tree TanStack renders.
  *
- * `col.accessor('name', ...)` leaves `id` undefined and stores the key as
- * `accessorKey` — TanStack only derives the id later, inside the table. Reading
- * `.id` alone therefore produced `undefined` for the six string-accessor
- * columns, so no preset could ever hide them and Country, Sector and Exchange
- * stayed on screen under Valuation, Growth, Quality and Risk.
+ * Each run of consecutive leaves sharing a group becomes one banner spanning
+ * them; spine leaves carry `NO_GROUP` and are emitted bare, so they occupy the
+ * lower header row with an empty cell above.
  */
-export const ALL_COLUMN_IDS = columns.map(
-  (c) => (c as { id?: string; accessorKey?: string }).id
-    ?? (c as { accessorKey?: string }).accessorKey as string,
-)
+export function buildColumns(leaves: Leaf[]): ColumnDef<Stock, any>[] {  // eslint-disable-line @typescript-eslint/no-explicit-any
+  const out: ColumnDef<Stock, any>[] = []  // eslint-disable-line @typescript-eslint/no-explicit-any
+  let i = 0
+  while (i < leaves.length) {
+    const group = leaves[i].group
+    if (group === NO_GROUP) {
+      out.push(leafColumn(leaves[i]))
+      i += 1
+      continue
+    }
+    const run: Leaf[] = []
+    while (i < leaves.length && leaves[i].group === group) {
+      run.push(leaves[i])
+      i += 1
+    }
+    out.push(col.group({
+      id: group,
+      header: group,
+      columns: run.map(leafColumn),
+    }) as ColumnDef<Stock, any>)  // eslint-disable-line @typescript-eslint/no-explicit-any
+  }
+  return out
+}
+
+export const columns = buildColumns(LEAVES)

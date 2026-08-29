@@ -14,6 +14,7 @@
   --warn: #8a6320;
   --row-hover: #f4f4f2;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --head-h: 31px;
   color-scheme: light;
 }
 
@@ -153,23 +154,73 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 13px; }
+/* Fixed layout so rendered widths equal the widths TanStack declares. The
+   pinned columns offset themselves by the declared widths to their left, so
+   letting the browser negotiate its own would slide them over their neighbours.
+   `max-content` lets the columns sum past the viewport and scroll. */
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: max-content;
+  min-width: 100%;
+  font-size: 13px;
+}
 
+/* Both header tiers stick. The lower one offsets by exactly one row, so the
+   height below is fixed rather than left to the font's line box. */
 thead th {
-  position: sticky; top: 0; z-index: 10;
+  position: sticky; z-index: 10;
+  height: var(--head-h);
   background: var(--surface);
   border-bottom: 1px solid var(--border-strong);
   padding: 7px 10px;
   text-align: left;
   font-weight: 600;
   font-size: 12px;
+  line-height: 16px;
   color: var(--muted);
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
 }
+thead tr:first-child th { top: 0; }
+thead tr:nth-child(2) th { top: var(--head-h); }
 thead th:hover { color: var(--text); background: var(--row-hover); }
 thead th.right { text-align: right; }
+
+/* Group banner: centred over its columns, and not a sort target. */
+thead th.banner {
+  text-align: center;
+  cursor: default;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+}
+thead th.banner:hover { color: var(--muted); background: var(--surface); }
+
+/* The empty cell above a spine column, which carries no banner. */
+thead th.spacer { cursor: default; border-bottom: 1px solid var(--border); }
+thead th.spacer:hover { background: var(--surface); }
+
+/* Frozen identity columns. Backgrounds must be opaque or the scrolled cells
+   show straight through them, and the header corner has to outrank both the
+   sticky header row and the pinned body cells. */
+th.pinned, td.pinned { position: sticky; }
+td.pinned { background: var(--bg); z-index: 5; }
+thead th.pinned { z-index: 15; }
+.pinned.edge { border-right: 1px solid var(--border-strong); }
+
+/* Below this width the three frozen columns would eat most of the viewport,
+   so they scroll with everything else. Only the positioning is dropped; the
+   column order is unchanged. */
+@media (max-width: 720px) {
+  th.pinned, td.pinned { position: static; }
+  .pinned.edge { border-right: none; }
+}
 .th-inner { display: inline-flex; align-items: center; gap: 4px; }
 th.right .th-inner { flex-direction: row-reverse; }
 .sort-mark { font-size: 9px; color: var(--accent); }
@@ -179,12 +230,27 @@ tbody td {
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
 tbody td.right { text-align: right; }
 tbody tr { cursor: pointer; }
 tbody tr:hover td { background: var(--row-hover); }
 tbody tr.stale td:first-child { box-shadow: inset 2px 0 0 var(--warn); }
+
+/* Provenance badge: which source the growth columns for this row came from. */
+.source {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+}
+.source-sec { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.source-none { color: var(--warn); }
 
 .rank { color: var(--muted); font-size: 12px; }
 .ticker { font-weight: 600; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }

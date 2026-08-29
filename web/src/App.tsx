@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SortingState, VisibilityState } from '@tanstack/react-table'
-import { ALL_COLUMN_IDS, PRESETS } from './columns'
+import { ALL_COLUMN_IDS, resolvePreset } from './columns.def'
 import { applyFilters, EMPTY_FILTERS, Filters, type FilterState } from './Filters'
 import { DetailDrawer } from './DetailDrawer'
 import { StockTable } from './StockTable'
@@ -10,7 +10,7 @@ import type { Meta, Sparklines, Stock } from './types'
 const BASE = import.meta.env.BASE_URL
 
 function visibilityFor(preset: string): VisibilityState {
-  const wanted = new Set(PRESETS[preset] ?? PRESETS.Overview)
+  const wanted = new Set(resolvePreset(preset))
   return Object.fromEntries(ALL_COLUMN_IDS.map((id) => [id, wanted.has(id)]))
 }
 
@@ -72,7 +72,7 @@ export default function App() {
   )
 
   function exportCSV() {
-    const cols = PRESETS[preset] ?? ALL_COLUMN_IDS
+    const cols = resolvePreset(preset)
     const rows = visibleRows.current.length ? visibleRows.current : filtered
     const blob = new Blob([toCSV(rows, cols)], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)

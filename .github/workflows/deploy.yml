@@ -36,7 +36,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # 22+ for `node --experimental-strip-types`, which lets the test suite
+          # import the TypeScript column registry without a bundler.
+          node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
 
