@@ -57,6 +57,50 @@ Delisted issuers retain real but stale figures on EDGAR — Toyota withdrew its 
 ADR in 2024, for example. Any series whose most recent year is more than two
 years old is discarded rather than presented as current.
 
+### Ticker resolution
+
+The holdings file identifies companies by local ticker and currency, which is
+not a unique key. `SAN` in euros is Banco Santander in Madrid *and* Sanofi in
+Paris; `LIN` in euros is both Linde and Linedata Services. Resolution therefore
+probes candidate Yahoo symbols for a company *name*, not merely for a symbol
+that returns data, and prefers a candidate whose name agrees with the holding.
+
+A name disagreement is not treated as fatal. Companies rename themselves — DHL
+Group answers to "Deutsche Post AG", General Electric to "GE Aerospace" — so
+when no candidate agrees, the first that returns a usable quote is accepted, as
+before. Those resolutions are written to `data/mismatches.json` as a review
+worklist for `overrides.yaml`.
+
+A candidate must carry a market capitalisation to be considered. Several
+exchanges expose stub symbols that answer with a company name and nothing else:
+`NOVOB.CO` and `MT.PA` are Novo Nordisk and ArcelorMittal by name, with no
+price, currency or cap. Resolving to one loses the company at the next stage,
+which drops rows without a market cap.
+
+### Universe construction
+
+The universe is drawn from an ETF's *holdings*, not from its index's constituent
+list, and the distinction has consequences. SPGM is a sampled portfolio: it holds
+roughly 2,900 of the index's names rather than all of them, and index weights are
+free-float adjusted. A company with a small public float can therefore be absent
+from the file entirely, at which point no amount of ticker resolution will find
+it. Saudi Aramco — ninth largest company in the world, roughly 2% float — is not
+in the file at all.
+
+`pipeline/supplemental.yaml` closes that gap. It is a short, manually curated
+list of companies that belong in a global top 1,000 but are absent from the
+holdings file. Entries carry a Yahoo symbol directly, so they skip ticker
+resolution, and no index weight, so `index_weight` publishes as null rather than
+a fabricated zero. Everything downstream — quotes, price history, fundamentals,
+deduplication and ranking — treats them identically to index-derived rows.
+
+Because these rows have no weight, they are exempt from the weight-ordered
+truncation to 1,000 and take their slots from the bottom of the weighted set. Each
+entry therefore displaces a genuine constituent, so the list should stay short and
+every entry should be justified in place. A company that appears to be missing is
+more often mis-resolved than absent; verify against the holdings file before
+adding it.
+
 ### Duplicate listings
 
 The source index lists several companies more than once: TSMC as both its Taiwan
@@ -271,6 +315,8 @@ allowance in approximately two months.
 pipeline/
   universe.py       SSGA holdings -> top 1000 + Yahoo ticker resolution
   exchange_map.py   currency -> candidate Yahoo suffixes
+  overrides.yaml    manual ticker fixes for holdings the mapper cannot resolve
+  supplemental.yaml curated constituents absent from the holdings file
   fetcher.py        disk cache and retry policy, shared by every remote source
   yahoo.py          price history, income statements, FX
   quotes.py         batched quotes and best-effort profile enrichment

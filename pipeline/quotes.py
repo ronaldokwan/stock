@@ -101,6 +101,32 @@ def fetch_batch(symbols: list[str], max_new: int | None = None) -> dict[str, dic
     return out
 
 
+def identify(symbols: list[str]) -> dict[str, str]:
+    """Symbol -> company name, for symbols Yahoo serves a *usable* quote for.
+
+    This is what ticker resolution probes with. Existence alone cannot resolve a
+    ticker, because a ticker plus a currency is not unique -- ``SAN`` in euros is
+    Banco Santander in Madrid and Sanofi in Paris, and both return data.
+
+    Carrying a market cap is part of being usable. Several exchanges expose stub
+    symbols that answer with a company name but no cap, price or currency:
+    ``NOVOB.CO`` and ``MT.PA`` are Novo Nordisk and ArcelorMittal by name and
+    empty in every other respect. Resolving to one of those loses the company
+    entirely at the next stage, which drops rows with no market cap. Excluding
+    them here applies that same rule while there is still another candidate to
+    fall back to.
+
+    The batch quote endpoint answers 50 symbols per request and carries both the
+    name and the cap, so this is cheaper than the 5-day history download it
+    replaced, and it warms the quote cache that stage 3 reads immediately after.
+    """
+    if not symbols:
+        return {}
+    got = fetch_batch(symbols)
+    return {s: (q.get("longName") or q.get("shortName") or "")
+            for s, q in got.items() if q.get("marketCap")}
+
+
 # ------------------------------------------------------- profile enrichment
 def fetch_profiles(symbols: list[str], max_new: int | None = None) -> dict[str, dict]:
     """Sector, industry and quality ratios. Best-effort and never fatal.

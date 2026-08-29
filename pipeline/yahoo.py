@@ -1,4 +1,4 @@
-"""Yahoo Finance access layer: symbol probing, price history and quote fields.
+"""Yahoo Finance access layer: price history, income statements and FX.
 
 Everything Yahoo-specific lives here so it can be swapped wholesale (for stooq
 or a paid feed) without touching the rest of the pipeline. The caching, retry
@@ -102,28 +102,6 @@ def _download(chunk: list[str], **kwargs) -> dict[str, pd.Series]:
     df = yf.download(chunk, threads=C.YF_THREADS, progress=False,
                      auto_adjust=True, **kwargs)
     return _extract_close(df, chunk)
-
-
-# --------------------------------------------------------------------- probe
-def probe(symbols: list[str]) -> set[str]:
-    """Return the subset of ``symbols`` Yahoo actually serves data for.
-
-    Only called for genuinely ambiguous tickers (mostly EUR listings that could
-    sit on any of a dozen exchanges). Unambiguous symbols skip this entirely and
-    are validated for free by the history fetch.
-    """
-    valid: set[str] = set()
-    if not symbols:
-        return valid
-
-    breaker = Breaker(C.YF_BREAKER_CHUNKS)
-    for got in fetcher.chunked(
-            symbols, C.YF_CHUNK,
-            lambda chunk: _download(chunk, period="5d", interval="1d"),
-            breaker=breaker, label="probed", on_rate_limit=reset_session):
-        valid |= set(got or {})
-    log.info("  probe: %d/%d valid", len(valid), len(symbols))
-    return valid
 
 
 # ------------------------------------------------------------------- history

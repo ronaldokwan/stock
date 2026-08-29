@@ -1,0 +1,70 @@
+# Companies that belong in a global top-1000 by market cap but are absent from
+# the SSGA holdings file, and so can never be found by ticker resolution.
+#
+# SPGM is a *sampled* ETF: it holds roughly 2,900 of its index's constituents
+# rather than all of them, and index weights are free-float adjusted. A company
+# with a small float, a recent listing, or a domicile the fund does not sample
+# is simply not in the file. Saudi Aramco is the clearest case -- the ninth
+# largest company on earth, ~2% free float, not held at all.
+#
+# These rows carry no index weight (the fund does not hold them), so
+# `index_weight` publishes as null and they are retained regardless of the
+# weight-based truncation. Everything else -- quotes, history, fundamentals,
+# deduplication, ranking -- treats them exactly like any other row.
+#
+# Keep this list short and justified. Each entry displaces a genuine index
+# constituent from the 1000, so an entry that is not clearly top-1000 by market
+# cap makes the table worse. Verify a candidate is really absent before adding
+# it: a company that looks missing is more often mis-resolved, which is a bug to
+# fix in overrides.yaml rather than an entry here.
+#
+#   symbol    Yahoo ticker (must return a market cap)
+#   name      fallback display name; Yahoo's long name wins when available
+#   currency  quote currency, for the FX pre-fetch
+#   note      why it is absent, so the list can be re-audited later
+
+companies:
+  - symbol: 2222.SR
+    name: SAUDI ARABIAN OIL CO
+    currency: SAR
+    note: ~2% free float; not held by SPGM at any weight
+
+  - symbol: 688825.SS
+    name: CXMT
+    currency: CNY
+    note: STAR Market listing; China A-share, not sampled by SPGM
+
+  - symbol: ARM
+    name: ARM HOLDINGS PLC
+    currency: USD
+    note: ~10% float after the 2023 IPO; SoftBank retains the rest
+
+  - symbol: 0941.HK
+    name: CHINA MOBILE LTD
+    currency: HKD
+    note: state-controlled float; not sampled
+
+  - symbol: 601138.SS
+    name: FOXCONN INDUSTRIAL INTERNET CO LTD
+    currency: CNY
+    note: China A-share, not sampled
+
+  - symbol: 0883.HK
+    name: CNOOC LTD
+    currency: HKD
+    note: state-controlled float; not sampled
+
+  - symbol: IBKR
+    name: INTERACTIVE BROKERS GROUP INC
+    currency: USD
+    note: small public float; most equity held via IBG Holdings
+
+  - symbol: INVE-B.ST
+    name: INVESTOR AB
+    currency: SEK
+    note: Wallenberg holding company; not sampled
+
+  - symbol: 6669.TW
+    name: WIWYNN CORP
+    currency: TWD
+    note: not sampled

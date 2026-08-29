@@ -38,7 +38,7 @@ tickers:
   ZEN:INR: ZENTEC.NS
 
   # --- elsewhere ---------------------------------------------------------
-  KSP:EUR: KRZ.IR            # Kingspan trades in Dublin under KRZ
+  KSP:EUR: KRX.IR            # Kingspan is KRX in Dublin; KRZ is Kerry Group
   CIMB:MYR: 1023.KL          # Bursa Malaysia uses numeric codes on Yahoo
   "PE&OLES *:MXN": PE&OLES.MX
 

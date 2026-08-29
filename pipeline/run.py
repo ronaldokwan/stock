@@ -48,7 +48,13 @@ def main(argv=None) -> int:
     step(1, "Universe")
     path = universe.download_holdings(force=args.refresh_holdings)
     holdings = universe.load_holdings(path)
-    candidates = universe.resolve(holdings, yahoo.probe, limit=args.limit)
+    # Probing by quote rather than by price history: the quote carries the
+    # company name, which is what makes an ambiguous ticker resolvable, and
+    # it warms the cache stage 3 reads.
+    candidates = universe.resolve(holdings, quotes_mod.identify, limit=args.limit)
+    # Added before any fetching, so curated constituents get quotes, history and
+    # fundamentals from exactly the same path as the rest of the universe.
+    candidates = universe.with_supplemental(candidates)
     symbols = candidates["symbol"].tolist()
     if not symbols:
         log.error("no symbols resolved - aborting")

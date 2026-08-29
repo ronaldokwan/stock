@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from pathlib import Path
 
 import pandas as pd
@@ -16,8 +17,10 @@ from .exchange_map import candidates, is_ambiguous
 log = logging.getLogger(__name__)
 
 OVERRIDES = Path(__file__).parent / "overrides.yaml"
+SUPPLEMENTAL = Path(__file__).parent / "supplemental.yaml"
 UNIVERSE_JSON = C.CACHE / "universe.json"
 UNRESOLVED_JSON = C.DATA / "unresolved.json"
+MISMATCHES_JSON = C.DATA / "mismatches.json"
 
 
 def download_holdings(force: bool = False) -> Path:
@@ -85,11 +88,75 @@ def _load_overrides() -> dict[str, str]:
     return {str(k): str(v) for k, v in (data.get("tickers") or {}).items()}
 
 
+# Corporate boilerplate carries no identifying information, and share-class and
+# depositary wording differs between SSGA's name and Yahoo's for the same company.
+_NAME_NOISE = {
+    "inc", "corp", "corporation", "ltd", "limited", "plc", "llc", "lp",
+    "company", "companies", "group", "holding", "holdings", "the", "and",
+    "class", "reg", "shs", "ord", "adr", "gdr", "spon", "sponsored", "new",
+    "pref", "prf", "cdi", "cdr", "receipts", "nyrt", "pjsc", "jsc",
+    "psc", "tbk", "bhd", "oyj", "asa", "spa", "sab", "sac", "aktiengesellschaft",
+    "société", "societe", "anonyme", "public",
+}
+# SSGA truncates its names to 29 characters, always at the end, so the holding's
+# LAST word may be a fragment: "TAIWAN SEMICONDUCTOR MANUFAC" has to pair with
+# Yahoo's "Manufacturing". Only that final word gets prefix tolerance -- allowing
+# it anywhere pairs "SAMSUNG ELECTRONICS" with "Samsung Electro-Mechanics".
+_PREFIX_MIN = 4
+
+
+def _name_words(name) -> list[str]:
+    """Identifying words in a company name, in order, accent- and case-folded."""
+    folded = (unicodedata.normalize("NFKD", str(name))
+              .encode("ascii", "ignore").decode("ascii"))
+    return [t for t in re.findall(r"[a-z0-9]+", folded.lower())
+            if len(t) > 2 and t not in _NAME_NOISE]
+
+
+def _name_tokens(name) -> set[str]:
+    return set(_name_words(name))
+
+
+def _same_company(holding_name, yahoo_name) -> bool:
+    """Whether two names plausibly describe the same company.
+
+    Used only to *choose between* candidate symbols, never to reject one
+    outright. Companies rename themselves -- General Electric answers to "GE
+    Aerospace" and DHL Group to "Deutsche Post AG" -- so a name disagreement is
+    weak evidence on its own, and treating it as fatal would drop good rows.
+
+    Agreement, on the other hand, is strong evidence, and it is what
+    distinguishes Banco Santander from Sanofi when both are quoted as ``SAN`` in
+    euros. One shared word is enough only when that is all either name has;
+    otherwise "China Mobile" would answer to "China Life".
+    """
+    words = _name_words(holding_name)
+    a, b = set(words), _name_tokens(yahoo_name)
+    if not a or not b:
+        return False
+
+    shared = len(a & b)
+    # The holding's final word may be a truncation of a longer one.
+    tail = words[-1] if words else ""
+    if tail and tail not in b and len(tail) >= _PREFIX_MIN:
+        shared += any(y.startswith(tail) for y in b)
+
+    # One shared word suffices only when it is the whole of both names -- Linde
+    # is "Linde plc" on both sides. If either name has more to say, that has to
+    # agree too: "MERCK KGAA" shares "merck" with "Merck & Co., Inc." and is a
+    # different company.
+    return shared >= 2 or (shared >= 1 and len(a) == 1 and len(b) == 1)
+
+
 def resolve(df: pd.DataFrame, probe_fn, limit: int | None = None) -> pd.DataFrame:
     """Attach a validated Yahoo symbol to each holding.
 
-    ``probe_fn(symbols) -> set[str]`` returns the subset that exist on Yahoo.
-    Unambiguous currencies are still probed, in bulk, to catch bad guesses.
+    ``probe_fn(symbols) -> {symbol: company name}`` for the symbols Yahoo serves.
+    The name is what makes this resolution rather than guessing: a ticker plus a
+    currency is not unique. ``SAN`` in euros is both Banco Santander in Madrid
+    and Sanofi in Paris, and accepting the first suffix that merely *returned
+    data* silently published Sanofi under Santander's index weight while dropping
+    Santander from the table entirely.
     """
     overrides = _load_overrides()
     n = limit or C.RESOLVE_BUFFER
@@ -126,29 +193,54 @@ def resolve(df: pd.DataFrame, probe_fn, limit: int | None = None) -> pd.DataFram
     log.info("resolving %d holdings: %d unambiguous, %d ambiguous",
              len(work), single, len(pending))
 
+    # Two outcomes per holding: a candidate whose name agrees with the holding
+    # (accepted, and probing stops there), or one that merely exists (kept as a
+    # fallback, and probing continues in case a later tier agrees). Only if no
+    # tier agrees does the fallback win -- which is the old behaviour, so a
+    # renamed company is never dropped for failing to match.
     resolved: dict[int, str] = {}
+    fallback: dict[int, tuple[str, str]] = {}
     probed_total = 0
     for tier in range(max((len(v) for v in pending.values()), default=0)):
         batch = {i: lst[tier] for i, lst in pending.items()
                  if i not in resolved and tier < len(lst)}
         if not batch:
             break
-        valid = probe_fn(sorted(set(batch.values())))
+        found = probe_fn(sorted(set(batch.values())))
         probed_total += len(set(batch.values()))
         for i, sym in batch.items():
-            if sym in valid:
+            if sym not in found:
+                continue
+            if _same_company(work.at[i, "name"], found[sym]):
                 resolved[i] = sym
+            elif i not in fallback:
+                fallback[i] = (sym, found[sym])
         log.info("  tier %d: %d probed, %d/%d ambiguous resolved",
                  tier + 1, len(set(batch.values())), len(resolved), len(pending))
     log.info("probe requests used: %d", probed_total)
 
-    symbols, unresolved = [], []
+    corrected = [i for i in resolved if i in fallback and fallback[i][0] != resolved[i]]
+    for i in corrected:
+        log.info("  %s/%s -> %s (not %s, which is %s)",
+                 work.at[i, "local_ticker"], work.at[i, "currency"], resolved[i],
+                 fallback[i][0], fallback[i][1])
+    if corrected:
+        log.info("name check corrected %d ticker collisions", len(corrected))
+
+    symbols, unresolved, unverified = [], [], []
     for i, row in work.iterrows():
         options = row["candidates"]
         if len(options) == 1:
             hit = options[0]
         else:
-            hit = resolved.get(i)
+            hit = resolved.get(i) or (fallback[i][0] if i in fallback else None)
+            if hit is not None and i not in resolved:
+                unverified.append({
+                    "name": row["name"], "local_ticker": row["local_ticker"],
+                    "currency": row["currency"], "symbol": hit,
+                    "yahoo_name": fallback[i][1],
+                    "weight": float(row["weight"]),
+                })
         symbols.append(hit)
         if hit is None:
             unresolved.append({
@@ -163,10 +255,79 @@ def resolve(df: pd.DataFrame, probe_fn, limit: int | None = None) -> pd.DataFram
         log.warning("%d holdings unresolved -> %s (add fixes to overrides.yaml)",
                     len(unresolved), UNRESOLVED_JSON.name)
 
+    # Accepted on existence alone. Usually a rename, occasionally a wrong
+    # company -- either way it is the worklist for overrides.yaml.
+    unverified.sort(key=lambda r: -r["weight"])
+    MISMATCHES_JSON.write_text(json.dumps(unverified, indent=2), encoding="utf-8")
+    if unverified:
+        log.warning("%d holdings resolved without a name match -> %s "
+                    "(review; most are renames)", len(unverified),
+                    MISMATCHES_JSON.name)
+
     out = work[work["symbol"].notna()].drop(columns=["candidates"])
     out = out.drop_duplicates(subset=["symbol"], keep="first").reset_index(drop=True)
     log.info("resolved universe: %d candidate symbols", len(out))
     return out
+
+
+def load_supplemental() -> pd.DataFrame:
+    """Curated constituents the holdings file does not contain.
+
+    The universe is an ETF's *holdings*, not its index's constituent list. SPGM
+    samples: it holds ~2,900 of the index's names, and weights are free-float
+    adjusted, so a company with a small float can be absent at any weight.
+    Saudi Aramco -- ninth largest on earth, ~2% float -- is not in the file at
+    all, and no amount of ticker resolution can find something that is not there.
+
+    Entries arrive with a Yahoo symbol already known, so they skip resolution,
+    and with no weight, since the fund holds none of them.
+    """
+    if not SUPPLEMENTAL.exists():
+        return pd.DataFrame()
+    data = yaml.safe_load(SUPPLEMENTAL.read_text(encoding="utf-8")) or {}
+    entries = data.get("companies") or []
+    if not entries:
+        return pd.DataFrame()
+    return pd.DataFrame([{
+        "name": e["name"],
+        "local_ticker": e.get("local_ticker") or e["symbol"],
+        "sedol": None,
+        # No index weight: the fund does not hold these. NaN rather than 0.0 so
+        # the published index_weight is null rather than a fabricated zero.
+        "weight": float("nan"),
+        "currency": e.get("currency"),
+        "symbol": e["symbol"],
+        # Their names are the primary listing's, never a GDR line's wording, so
+        # deduplication must not demote them on a name match.
+        "via_override": True,
+        "supplemental": True,
+    } for e in entries])
+
+
+def with_supplemental(df: pd.DataFrame) -> pd.DataFrame:
+    """Append curated constituents to the resolved candidates.
+
+    Appended before quotes and history are fetched, so a supplemental row is
+    filled in from exactly the same sources as every other row. A symbol already
+    resolved from the holdings file wins: if the fund starts holding one of
+    these, the real holding (with its real weight) supersedes the manual entry.
+    """
+    df = df.copy()
+    df["supplemental"] = False
+    extra = load_supplemental()
+    if extra.empty:
+        return df
+
+    already = set(df["symbol"])
+    extra = extra[~extra["symbol"].isin(already)]
+    if extra.empty:
+        log.info("supplemental: all %d entries already in the holdings file",
+                 len(load_supplemental()))
+        return df
+
+    log.info("supplemental: added %d curated symbols not in the holdings file (%s)",
+             len(extra), ", ".join(extra["symbol"]))
+    return pd.concat([df, extra], ignore_index=True)
 
 
 # A holding whose SSGA name carries one of these is a secondary line: a
@@ -254,14 +415,37 @@ def finalise(df: pd.DataFrame, with_data: set[str], target: int,
     symbols which turn out to be dead (bad suffix guess, delisted, no Yahoo
     coverage) can be dropped without the table falling short of 1000 rows, and
     so that collapsing duplicate listings pulls real companies in behind them.
+
+    Supplemental rows survive the truncation unconditionally: they carry no index
+    weight, so a weight-ordered cut would always discard them, which would defeat
+    the entire point of listing them. They take slots from the bottom of the
+    weighted set instead.
     """
     kept = df[df["symbol"].isin(with_data)].reset_index(drop=True)
     dropped = len(df) - len(kept)
     if dropped:
         log.info("dropped %d symbols that returned no data", dropped)
+
+    if "supplemental" in df.columns:
+        lost = df[df["supplemental"].fillna(False).astype(bool)
+                  & ~df["symbol"].isin(with_data)]
+        for _, row in lost.iterrows():
+            log.warning("supplemental symbol %s returned no data - check "
+                        "supplemental.yaml", row["symbol"])
+
     kept = deduplicate(kept, names or {})
-    out = kept.head(target).reset_index(drop=True)
-    log.info("final universe: %d symbols", len(out))
+
+    flag = (kept["supplemental"].fillna(False).astype(bool)
+            if "supplemental" in kept.columns else pd.Series(False, index=kept.index))
+    extra, indexed = kept[flag], kept[~flag]
+    room = max(target - len(extra), 0)
+    out = pd.concat([indexed.head(room), extra], ignore_index=True)
+
+    if len(extra):
+        log.info("final universe: %d symbols (%d from the index, %d supplemental)",
+                 len(out), min(len(indexed), room), len(extra))
+    else:
+        log.info("final universe: %d symbols", len(out))
     return out
 
 

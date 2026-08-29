@@ -6,6 +6,7 @@ __pycache__/
 # Pipeline working files: regenerated on every run, and large.
 data/cache/
 data/unresolved.json
+data/mismatches.json
 
 # Node
 node_modules/
