@@ -4,8 +4,8 @@ import json
 import pandas as pd
 import pytest
 
-from pipeline import build
-from pipeline.build import _sparkline, _to_usd
+from pipeline import build, schema
+from pipeline.build import _rate, _sparkline, _to_usd
 
 
 class TestCurrencyConversion:
@@ -145,3 +145,68 @@ class TestMinorUnitGuard:
         assert build.MINOR_UNITS['KWF'] == ('KWD', 1000)
         assert build.major_currency('KWF') == 'KWD'
         assert build.major_currency('USD') == 'USD'
+
+
+class TestPercentQuotedRates:
+    """Yahoo mixes conventions: margins and returns arrive as fractions, but
+    dividend yield and debt/equity arrive as percentages. Publishing both as-is
+    rendered NVIDIA's 0.44% dividend as 44% and its 0.17x gearing as 17x."""
+
+    def test_dividend_yield_becomes_a_fraction(self):
+        assert _rate(0.44) == pytest.approx(0.0044)
+        assert _rate(15.81) == pytest.approx(0.1581)
+
+    def test_debt_to_equity_becomes_a_ratio(self):
+        assert _rate(55.9) == pytest.approx(0.559)
+
+    def test_missing_stays_missing(self):
+        assert _rate(None) is None
+
+    def test_the_conversion_reaches_the_published_row(self):
+        universe = pd.DataFrame([{'symbol': 'AAA', 'name': 'A', 'local_ticker': 'A',
+                                  'sedol': 'S', 'weight': 1.0, 'currency': 'USD',
+                                  'merged_symbols': []}])
+        quotes = {'AAA': {'marketCap': 1e9, 'currency': 'USD',
+                          'dividendYield': 2.2, 'debtToEquity': 55.9}}
+        rows, _, _ = build.build(universe, quotes, {}, {}, {}, {'USD': 1.0})
+        assert rows[0]['dividend_yield'] == pytest.approx(0.022)
+        assert rows[0]['debt_to_equity'] == pytest.approx(0.559)
+
+
+class TestPublishGuards:
+    """The two mistakes that look completely normal in the published JSON: rows
+    left in index-weight order under a heading that says market cap, and a rate
+    that silently switches between percent and fraction upstream."""
+
+    def _rows(self, caps):
+        return [{'symbol': f'S{i}', 'rank': i + 1, 'market_cap_usd': c}
+                for i, c in enumerate(caps)]
+
+    def test_weight_ordered_rows_are_rejected(self):
+        rows = self._rows([9e11, 8e11, 5e11, 7e11])
+        with pytest.raises(schema.ValidationError, match='descending market-cap'):
+            schema._check_ranking(rows)
+
+    def test_market_cap_order_passes(self):
+        schema._check_ranking(self._rows([9e11, 8e11, 7e11, 5e11]))
+
+    def test_rank_must_be_a_dense_sequence(self):
+        rows = self._rows([9e11, 8e11])
+        rows[1]['rank'] = 7
+        with pytest.raises(schema.ValidationError, match='dense'):
+            schema._check_ranking(rows)
+
+    def test_missing_market_caps_must_sit_at_the_bottom(self):
+        rows = self._rows([9e11, None, 7e11])
+        with pytest.raises(schema.ValidationError, match='rank last'):
+            schema._check_ranking(rows)
+        schema._check_ranking(self._rows([9e11, 7e11, None]))
+
+    def test_percent_quoted_dividend_yield_is_caught(self):
+        rows = [{'dividend_yield': v} for v in (0.44, 2.2, 5.0, 15.8)]
+        with pytest.raises(schema.ValidationError, match='dividend_yield'):
+            schema._check_rate_units(rows)
+
+    def test_fractions_pass(self):
+        schema._check_rate_units([{'dividend_yield': v, 'debt_to_equity': v * 25}
+                                  for v in (0.0044, 0.022, 0.05, 0.158)])

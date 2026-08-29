@@ -10,6 +10,52 @@ import pandas as pd
 # before declaring the window unavailable.
 TOLERANCE_DAYS = 45
 
+# An isolated bar this far from BOTH of its neighbours is a data error, not a
+# price move: real moves do not snap straight back the following month.
+SPIKE_RATIO = 4.0
+# ...but only judge a bar against neighbours that agree with each other. During
+# a genuine crash the neighbours differ wildly and nothing should be dropped.
+NEIGHBOUR_RATIO = 3.0
+
+
+def sanitise_prices(series):
+    """Drop bars that cannot be prices, before any metric reads the series.
+
+    Yahoo's split/dividend-adjusted history carries two kinds of junk, and both
+    corrupt metrics silently:
+
+    * **Non-positive adjusted closes.** Adjusting decades of dividends off a
+      small early price drives it through zero -- Acciona and Tokio Marine both
+      have negative bars around 2000. A negative bar makes ``max_drawdown``
+      report -747%, which is not a decline any equity can suffer.
+    * **Isolated 100x bars.** A handful of tickers carry one bar quoted in the
+      wrong unit (3i and Unilever in pence vs pounds, Kuwaiti banks in fils).
+      One such bar inside the 5-year window put 3i's volatility at 537%.
+
+    Only a bar that is far from *both* neighbours is dropped, and only when
+    those neighbours agree with each other, so a genuine crash -- where the
+    move persists -- is left alone. Where glitches alternate with good bars the
+    filter may take a good bar with them; that stretch is unusable either way.
+    """
+    if series is None or len(series) == 0:
+        return series
+    s = series.dropna().sort_index()
+    s = s[s > 0]
+    if len(s) < 3:
+        return s
+
+    values = s.to_numpy(dtype=float)
+    keep = np.ones(len(values), dtype=bool)
+    for i in range(1, len(values) - 1):
+        before, here, after = values[i - 1], values[i], values[i + 1]
+        if max(before, after) / min(before, after) > NEIGHBOUR_RATIO:
+            continue                                 # neighbours disagree: real move
+        off_before = max(before, here) / min(before, here)
+        off_after = max(after, here) / min(after, here)
+        if off_before > SPIKE_RATIO and off_after > SPIKE_RATIO:
+            keep[i] = False
+    return s[keep]
+
 
 def cagr(series: pd.Series, years: int) -> float | None:
     """Annualised total return over the trailing ``years``.

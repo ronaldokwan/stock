@@ -82,6 +82,16 @@ def main(argv=None) -> int:
 
     # 5 ---------------------------------------------------------------------
     step(5, "Fundamentals")
+    # Without a contact string the SEC step quietly returns nothing and every
+    # 10-year revenue and profit column publishes as "-". That is a degraded
+    # dataset, which this pipeline is not allowed to ship by accident -- so an
+    # unset variable is an error, and dropping the columns has to be asked for.
+    if not args.skip_sec and not fundamentals.sec_enabled():
+        log.error("SEC_USER_AGENT is not set, so 10-year revenue and profit "
+                  "history cannot be fetched. Set it to a real contact "
+                  '("Your Name your@email.com"), or pass --skip-sec to publish '
+                  "without those columns on purpose.")
+        return 1
     names = dict(zip(uni["symbol"], uni["name"]))
     sec = {} if args.skip_sec else fundamentals.fetch_sec(symbols, names)
     non_sec = [s for s in symbols if s not in sec]

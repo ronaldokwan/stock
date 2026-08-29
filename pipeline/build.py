@@ -52,6 +52,19 @@ def major_currency(currency) -> str:
     return entry[0] if entry else cur
 
 
+def _rate(value):
+    """Yahoo's percent-quoted rates -> the fraction every other rate field uses.
+
+    ``dividendYield`` and ``debtToEquity`` come back as percentages (2.2 means
+    2.2%, 55.9 means 0.56x) while ``profitMargins``, ``returnOnEquity`` and the
+    returns come back as fractions. Storing both conventions in one row is what
+    made the table render NVIDIA's 0.44% dividend as 44%. Everything published
+    here is a fraction; ``schema.validate`` fails the run if a source silently
+    switches convention.
+    """
+    return None if value is None else float(value) / 100.0
+
+
 def _to_usd(value, currency, fx):
     """Convert a local-currency market cap to USD."""
     if value is None or not currency:
@@ -109,10 +122,10 @@ def build(universe, quotes, history, sec, income, fx):
             "price_to_book": clean(q.get("priceToBook")),
             "price_to_sales": clean(q.get("priceToSalesTrailing12Months")),
             "ev_to_ebitda": clean(q.get("enterpriseToEbitda")),
-            "dividend_yield": clean(q.get("dividendYield")),
+            "dividend_yield": clean(_rate(q.get("dividendYield"))),
             "profit_margin": clean(q.get("profitMargins")),
             "return_on_equity": clean(q.get("returnOnEquity")),
-            "debt_to_equity": clean(q.get("debtToEquity")),
+            "debt_to_equity": clean(_rate(q.get("debtToEquity"))),
             "beta": clean(q.get("beta")),
             "revenue_growth_ttm": clean(q.get("revenueGrowth")),
             "earnings_growth_ttm": clean(q.get("earningsGrowth")),

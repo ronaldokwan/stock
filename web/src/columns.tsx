@@ -146,4 +146,16 @@ export const PRESETS: Record<string, string[]> = {
     'max_drawdown', 'pct_from_52w_high', 'return_10y'],
 }
 
-export const ALL_COLUMN_IDS = columns.map((c) => (c as { id: string }).id)
+/**
+ * Every column id, for building the visibility map a preset switches between.
+ *
+ * `col.accessor('name', ...)` leaves `id` undefined and stores the key as
+ * `accessorKey` — TanStack only derives the id later, inside the table. Reading
+ * `.id` alone therefore produced `undefined` for the six string-accessor
+ * columns, so no preset could ever hide them and Country, Sector and Exchange
+ * stayed on screen under Valuation, Growth, Quality and Risk.
+ */
+export const ALL_COLUMN_IDS = columns.map(
+  (c) => (c as { id?: string; accessorKey?: string }).id
+    ?? (c as { accessorKey?: string }).accessorKey as string,
+)

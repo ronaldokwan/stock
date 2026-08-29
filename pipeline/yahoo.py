@@ -24,6 +24,7 @@ import pandas as pd
 import yfinance as yf
 
 from . import config as C
+from .metrics import sanitise_prices
 
 warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
@@ -237,7 +238,19 @@ def fetch_history(symbols: list[str], max_new: int | None = None) -> dict[str, p
         log.info("  history %d/%d fetched (%d total)",
                  min(n * C.YF_CHUNK, len(missing)), len(missing), len(cached))
         _pause()
-    return cached
+
+    # Cleaned on the way out rather than before caching, so the Parquet files
+    # stay a faithful copy of what Yahoo served and a change to the filter takes
+    # effect on the next run instead of needing the whole cache re-fetched.
+    cleaned, dropped = {}, 0
+    for s, series in cached.items():
+        out = sanitise_prices(series)
+        dropped += len(series.dropna()) - len(out)
+        cleaned[s] = out
+    if dropped:
+        log.info("history: dropped %d impossible price bars "
+                 "(non-positive or isolated 100x)", dropped)
+    return cleaned
 
 
 # ------------------------------------------------------------ income history

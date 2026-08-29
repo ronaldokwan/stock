@@ -38,18 +38,20 @@ Delisted issuers (Toyota dropped its US ADR in 2024) leave real but stale figure
 on EDGAR; anything whose latest year is more than two years old is discarded
 rather than presented as current.
 
-### Cross-listings are kept, deliberately
+### Duplicate listings are collapsed
 
-About 11 of the 1000 rows are a second listing of a company already in the table
-— TSMC appears as both `TSM` (US ADR) and `2330.TW`, Alphabet as both share
-classes. These are genuinely distinct tradeable securities, so they are kept.
+The index holds several companies more than once: TSMC as both its Taiwan line
+and a US ADR, Alphabet as two share classes, Rio Tinto as a dual-listed pair.
+Yahoo reports *whole-company* market cap on each of those lines, so leaving them
+all in would double-count the company and let it occupy two ranks at once.
 
-They are *not* auto-merged by name, because that quietly gets real cases wrong:
-`9984.T` and `9434.T` normalise to the same string but are SoftBank **Group** and
-SoftBank **Corp**, two different companies; likewise Samsung's ordinary
-(`005930.KS`) and preferred (`005935.KS`) shares. Collapsing those would be a
-worse error than showing a duplicate. Filter or dedupe downstream if you want one
-row per company.
+`universe.deduplicate` collapses them, preferring an ordinary share over a
+depositary receipt and the larger listing otherwise. The dropped tickers are
+kept on the surviving row as `also_listed_as`, so nothing silently disappears.
+
+Matching is deliberately conservative, because a careless name match gets real
+cases wrong. `9984.T` and `9434.T` look alike but are SoftBank **Group** and
+SoftBank **Corp** — two different companies — and both are correctly kept.
 
 ---
 
@@ -79,8 +81,13 @@ cd web && npm install && cd ..
 
 ### Set your SEC contact (required for fundamentals)
 
-The SEC requires a User-Agent naming a real contact. Without it you get a 403 and
-a ~10 minute IP block, and the pipeline silently falls back to Yahoo's four years.
+The SEC requires a User-Agent naming a real contact. There is nothing to sign up
+for -- it is a header string, not a key -- but without it you get a 403 and a
+~10 minute IP block.
+
+An unset variable now **aborts the run** rather than quietly publishing with the
+10-year revenue and profit columns blank. To publish without them deliberately,
+pass `--skip-sec`.
 
 ```bash
 export SEC_USER_AGENT="Your Name your@email.com"
@@ -143,6 +150,27 @@ The pipeline refuses to publish a degraded dataset. `pipeline/schema.py` aborts
 the run if fewer than 950 rows were built, if more than 15% are missing market
 cap, or if more than 30% are missing a P/E. On abort, the previously published
 data is left exactly as it was, so the site goes *stale* rather than *wrong*.
+
+Three checks target errors that a reader could never spot, because the output
+still looks entirely reasonable:
+
+- **Rank order.** Rows are *selected* by index weight and must be *ranked* by
+  market cap. Weight is free-float adjusted, so the two orders differ a lot --
+  publishing weight order put SpaceX at rank 338 with the seventh largest market
+  cap on the planet. Validation requires a dense 1..N in descending cap order.
+- **Rate units.** Yahoo returns `dividendYield` and `debtToEquity` as
+  percentages while margins, returns and ROE come back as fractions. Everything
+  published here is a fraction; mixing the two rendered NVIDIA's 0.44% dividend
+  as 44%. Validation fails if a source switches convention.
+- **Minor units.** Pence/agorot/fils market caps are reconstructed from
+  price x shares independently of the conversion under test.
+
+Price history is scrubbed before any metric reads it. Yahoo's adjusted closes go
+*negative* on some long histories (decades of dividends adjusted off a small
+early price), which reported a -747% max drawdown for Acciona, and a few tickers
+carry one bar quoted in the wrong unit, which put 3i's volatility at 537%. A bar
+is dropped only if it is non-positive, or far from *both* neighbours while those
+neighbours agree with each other -- a genuine crash persists and is left alone.
 
 Separately, a field that had a good value and now resolves to null keeps its
 previous value and is flagged `stale`, so one bad fetch cannot blank a column.

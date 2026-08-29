@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from pipeline.metrics import (annualised_vol, cagr, clean, max_drawdown,
-                              pct_from_high, series_cagr)
+                              pct_from_high, sanitise_prices, series_cagr)
 
 
 def monthly(start: str, months: int, monthly_rate: float, first: float = 100.0):
@@ -126,3 +126,41 @@ class TestExchangeMap:
         from pipeline.exchange_map import candidates
         for sym in candidates('BA.', 'GBP') + candidates('RR.', 'GBP'):
             assert '-.' not in sym and '..' not in sym
+
+
+class TestSanitisePrices:
+    """Yahoo's adjusted history carries bars that cannot be prices. They have to
+    go before any metric reads the series: one negative bar made Acciona's max
+    drawdown -747%, and one pence/pounds bar put 3i's volatility at 537%."""
+
+    def _series(self, values, start="2020-01-31"):
+        idx = pd.date_range(start=start, periods=len(values), freq="ME")
+        return pd.Series([float(v) for v in values], index=idx)
+
+    def test_drops_negative_adjusted_closes(self):
+        out = sanitise_prices(self._series([-1.7, -1.6, 50, 52, 54, 56]))
+        assert list(out) == [50, 52, 54, 56]
+
+    def test_drawdown_stays_within_minus_one_hundred_percent(self):
+        """The bug this exists to stop: a negative bar reported a -747% decline."""
+        # The negative bar has to follow a positive peak, as Acciona's does.
+        dirty = self._series([100, 90, -1.7, 95, 100])
+        assert max_drawdown(dirty) < -1.0
+        assert max_drawdown(sanitise_prices(dirty)) == pytest.approx(-0.1)
+
+    def test_drops_an_isolated_hundred_x_bar(self):
+        out = sanitise_prices(self._series([2000, 2100, 20.5, 2200, 2300]))
+        assert list(out) == [2000, 2100, 2200, 2300]
+
+    def test_keeps_a_genuine_crash_that_does_not_snap_back(self):
+        """A real collapse persists; only a bar that reverts is a data error."""
+        values = [100, 100, 10, 9, 11, 10]
+        assert list(sanitise_prices(self._series(values))) == values
+
+    def test_keeps_ordinary_volatility_untouched(self):
+        values = [100, 130, 95, 150, 80, 140]
+        assert list(sanitise_prices(self._series(values))) == values
+
+    def test_short_series_survive(self):
+        assert list(sanitise_prices(self._series([100, 250]))) == [100, 250]
+        assert len(sanitise_prices(pd.Series(dtype=float))) == 0

@@ -137,6 +137,64 @@ def _check_minor_units(rows: list[dict], fx: dict[str, float]) -> None:
         log.info("minor-unit market caps verified (%d rows)", checked)
 
 
+def _check_ranking(rows: list[dict]) -> None:
+    """The table's headline promise: rank 1 is the largest company.
+
+    Rows are *selected* by index weight but must be *ranked* by market cap, and
+    the two orders differ a lot -- index weight is free-float adjusted, so a
+    recent listing with a small float (SpaceX) sat at rank 338 with the seventh
+    largest market cap on the planet. Publishing weight order under a heading
+    that says market cap is the one error a reader cannot spot for themselves.
+    """
+    ranks = [r.get("rank") for r in rows]
+    if ranks != list(range(1, len(rows) + 1)):
+        raise ValidationError(
+            "rank is not a dense 1..N sequence in row order - _rank_by_market_cap "
+            "did not run, or something reordered the rows after it"
+        )
+    caps = [r.get("market_cap_usd") for r in rows]
+    out_of_order = [
+        f"#{i + 1} {rows[i]['symbol']} (${caps[i] / 1e9:.0f}B) above "
+        f"#{i + 2} {rows[i + 1]['symbol']} (${caps[i + 1] / 1e9:.0f}B)"
+        for i in range(len(caps) - 1)
+        if caps[i] is not None and caps[i + 1] is not None and caps[i] < caps[i + 1]
+    ]
+    if out_of_order:
+        raise ValidationError(
+            f"{len(out_of_order)} rows are not in descending market-cap order: "
+            + "; ".join(out_of_order[:3])
+        )
+    first_null = next((i for i, c in enumerate(caps) if c is None), None)
+    if first_null is not None and any(c is not None for c in caps[first_null:]):
+        raise ValidationError("rows without a market cap must rank last")
+
+
+# Fields Yahoo quotes as a percentage and the pipeline converts to a fraction.
+# The typical value each should land near once converted; an order-of-magnitude
+# miss means the upstream convention changed under us.
+_RATE_SANITY = {"dividend_yield": 0.25, "debt_to_equity": 10.0}
+
+
+def _check_rate_units(rows: list[dict]) -> None:
+    """Catch a silent unit flip in the fields that arrive as percentages.
+
+    yfinance has changed ``dividendYield`` between percent and fraction before.
+    Either mistake is invisible in the JSON -- the numbers stay plausible-looking
+    -- and only shows up on the page as a 44% dividend yield.
+    """
+    for field, ceiling in _RATE_SANITY.items():
+        values = sorted(r[field] for r in rows if r.get(field) is not None)
+        if not values:
+            continue
+        median = values[len(values) // 2]
+        if median > ceiling:
+            raise ValidationError(
+                f"median {field} is {median:.3g}, above {ceiling:g} - Yahoo has "
+                f"probably switched this field between percent and fraction; "
+                f"check the conversion in build._rate"
+            )
+
+
 def validate(rows: list[dict], fx: dict[str, float] | None = None) -> dict[str, float]:
     """Abort the run rather than publish a degraded dataset."""
     if len(rows) < C.MIN_ROWS:
@@ -159,6 +217,9 @@ def validate(rows: list[dict], fx: dict[str, float] | None = None) -> dict[str, 
             f"{missing_pe:.1%} of rows missing trailing P/E "
             f"(limit {C.MAX_MISSING_PE:.0%})"
         )
+
+    _check_ranking(rows)
+    _check_rate_units(rows)
 
     if fx:
         _check_minor_units(rows, fx)
