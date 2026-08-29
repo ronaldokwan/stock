@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-29T14:43:59+00:00",
+  "generated_at": "2026-08-29T15:28:45+00:00",
   "count": 1000,
   "universe_source": "SPDR Portfolio MSCI Global Stock Market ETF (SPGM) holdings",
   "price_source": "Yahoo Finance (yfinance)",
@@ -13,6 +13,7 @@
     "none": 0
   },
   "stale_rows": 0,
+  "derived_pe_rows": 21,
   "fx_rates": {
     "AED": 0.272294,
     "AUD": 0.716435,
@@ -65,7 +66,7 @@
     "market_cap": 1.0,
     "market_cap_usd": 1.0,
     "shares_outstanding": 1.0,
-    "trailing_pe": 0.878,
+    "trailing_pe": 0.899,
     "forward_pe": 0.961,
     "price_to_book": 0.978,
     "price_to_sales": 0.992,
@@ -92,6 +93,7 @@
     "max_drawdown": 1.0,
     "volatility_5y": 0.994,
     "pct_from_52w_high": 1.0,
+    "trailing_pe_derived": 1.0,
     "history_start": 1.0,
     "fundamentals_source": 1.0,
     "fundamentals_years": 1.0,

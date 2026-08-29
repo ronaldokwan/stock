@@ -46,6 +46,7 @@ export interface Stock {
   max_drawdown: number | null
   volatility_5y: number | null
   pct_from_52w_high: number | null
+  trailing_pe_derived: boolean
   history_start: string | null
   fundamentals_source: 'sec' | 'yahoo' | 'none'
   fundamentals_years: number
@@ -60,6 +61,7 @@ export interface Meta {
   fundamentals_sources: string[]
   fundamentals_breakdown: Record<string, number>
   stale_rows: number
+  derived_pe_rows: number
   fx_rates: Record<string, number>
   coverage: Record<string, number>
 }

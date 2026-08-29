@@ -1,5 +1,6 @@
 """Tests for dataset assembly: currency conversion and stale-value carry-over."""
 import json
+from datetime import datetime, timezone
 
 import pandas as pd
 import pytest
@@ -211,3 +212,89 @@ class TestPublishGuards:
     def test_fractions_pass(self):
         schema._check_rate_units([{'dividend_yield': v, 'debt_to_equity': v * 25}
                                   for v in (0.0044, 0.022, 0.05, 0.158)])
+
+
+class TestDerivedPE:
+    """Filling a trailing P/E that the quote left null.
+
+    Yahoo returns no ``epsTrailingTwelveMonths`` for Korean listings, so every
+    Korean line in the universe -- Samsung, SK hynix, Hyundai -- published with
+    an empty P/E while its peers elsewhere had one.
+    """
+
+    YEAR = datetime.now(timezone.utc).year
+
+    def _row(self, **over):
+        row = {'trailing_pe': None, 'market_cap': 1_687_606_735_667_200.0,
+               'currency': 'KRW'}
+        row.update(over)
+        return row
+
+    def _income(self, value, year=None):
+        return {'net_income': {str(year or self.YEAR - 1): value}}
+
+    def test_derives_from_market_cap_and_net_income(self):
+        row = self._row()
+        build._derive_pe(row, {'financialCurrency': 'KRW'},
+                         self._income(44_260_956_000_000.0))
+        assert row['trailing_pe'] == pytest.approx(38.1, abs=0.1)
+        assert row['trailing_pe_derived'] is True
+
+    def test_a_quoted_pe_is_never_overwritten(self):
+        row = self._row(trailing_pe=12.5)
+        build._derive_pe(row, {'financialCurrency': 'KRW'},
+                         self._income(44_260_956_000_000.0))
+        assert row['trailing_pe'] == 12.5
+        assert row.get('trailing_pe_derived') is not True
+
+    def test_reporting_currency_must_match_the_market_cap(self):
+        """A London listing reporting in dollars would divide pounds by dollars.
+
+        The result looks entirely plausible and is wrong by the exchange rate,
+        which is exactly the class of error that cannot be caught by eye.
+        """
+        row = self._row(currency='GBp')
+        build._derive_pe(row, {'financialCurrency': 'USD'},
+                         self._income(1_000_000_000.0))
+        assert row['trailing_pe'] is None
+
+    def test_pence_quoted_listing_matches_its_major_currency(self):
+        """Market cap for a GBp listing is denominated in GBP, not pence."""
+        row = self._row(currency='GBp', market_cap=20_000_000_000.0)
+        build._derive_pe(row, {'financialCurrency': 'GBP'},
+                         self._income(2_000_000_000.0))
+        assert row['trailing_pe'] == pytest.approx(10.0)
+
+    def test_lossmaking_company_keeps_an_empty_pe(self):
+        row = self._row()
+        build._derive_pe(row, {'financialCurrency': 'KRW'},
+                         self._income(-5_000_000_000_000.0))
+        assert row['trailing_pe'] is None
+
+    def test_near_zero_earnings_do_not_produce_a_headline_number(self):
+        row = self._row(market_cap=1e12)
+        build._derive_pe(row, {'financialCurrency': 'KRW'}, self._income(1e8))
+        assert row['trailing_pe'] is None
+
+    def test_a_stale_fiscal_year_is_refused(self):
+        """A delisted issuer's last filing must not be presented as current."""
+        row = self._row()
+        build._derive_pe(row, {'financialCurrency': 'KRW'},
+                         self._income(44e12, year=self.YEAR - 5))
+        assert row['trailing_pe'] is None
+
+    def test_uses_the_most_recent_year_available(self):
+        row = self._row(market_cap=1e12)
+        statement = {'net_income': {str(self.YEAR - 3): 1e10,
+                                    str(self.YEAR - 1): 5e10}}
+        build._derive_pe(row, {'financialCurrency': 'KRW'}, statement)
+        assert row['trailing_pe'] == pytest.approx(20.0)
+
+    def test_missing_inputs_are_survivable(self):
+        for statement in (None, {}, {'net_income': {}}):
+            row = self._row()
+            build._derive_pe(row, {'financialCurrency': 'KRW'}, statement)
+            assert row['trailing_pe'] is None
+        row = self._row(market_cap=None)
+        build._derive_pe(row, {'financialCurrency': 'KRW'}, self._income(1e12))
+        assert row['trailing_pe'] is None

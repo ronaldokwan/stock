@@ -31,6 +31,14 @@ SPARK_JSON = C.OUT / "sparklines.json"
 PROTECTED = ("market_cap_usd", "trailing_pe", "return_10y", "return_20y",
              "sector", "country", "name")
 
+# Above this, the earnings base is too near zero for the ratio to mean anything,
+# and a derived P/E is withheld rather than published as a headline number.
+PE_DERIVED_MAX = 1000.0
+
+# A completed fiscal year this far back no longer describes the current
+# business, the same cut-off the growth columns apply to a stale series.
+PE_MAX_STALE_YEARS = 2
+
 # Re-exported: currency handling moved to its own module so ``schema`` could
 # import it without a cycle, but these names are part of build's public surface.
 __all__ = ["MINOR_UNITS", "build", "major_currency", "write"]
@@ -137,6 +145,58 @@ def _growth_metrics(facts: dict | None, statement: dict | None) -> dict:
     return row
 
 
+def _derive_pe(row: dict, quote: dict, statement: dict | None) -> dict:
+    """Fill a missing trailing P/E from market cap and annual net income.
+
+    Yahoo omits ``trailingPE`` wherever it has no EPS for a listing, and for
+    some markets it never has one: every Korean line in the universe comes back
+    with ``epsTrailingTwelveMonths`` null, so Samsung, SK hynix and Hyundai all
+    published without a P/E while their peers elsewhere had one. Market cap over
+    net income is the same ratio reached by another route.
+
+    Three guards keep it honest, because a wrong P/E is worse than no P/E:
+
+    - The statement must be denominated in the currency the market cap is
+      denominated in. A company listed in London and reporting in dollars would
+      otherwise divide pounds by dollars and publish a plausible-looking number
+      that is wrong by the exchange rate.
+    - The fiscal year must be recent. This is an annual figure, not a trailing
+      twelve months, so it is already the staler of the two -- and a delisted or
+      dormant issuer's last filing must not be presented as current.
+    - Net income must be positive and not so small that the ratio explodes. A
+      lossmaking company has no meaningful P/E, which is why the cell is blank
+      in the first place.
+
+    Only the Yahoo statement path is used. SEC facts carry no currency in the
+    cache, so the first guard could not be applied to them.
+    """
+    if row.get("trailing_pe") is not None:
+        return row
+
+    cap = row.get("market_cap")
+    net_income = (statement or {}).get("net_income") or {}
+    if not cap or not net_income:
+        return row
+    if major_currency(row.get("currency")) != quote.get("financialCurrency"):
+        return row
+
+    year = max(net_income, key=int)
+    if int(year) < datetime.now(timezone.utc).year - PE_MAX_STALE_YEARS:
+        return row
+
+    latest = net_income[year]
+    if not latest or latest <= 0:
+        return row
+
+    pe = float(cap) / float(latest)
+    if pe > PE_DERIVED_MAX:
+        return row
+
+    row["trailing_pe"] = pe
+    row["trailing_pe_derived"] = True
+    return row
+
+
 def _carry_over(row: dict, prior: dict | None, quote: dict) -> dict:
     """Restore fields from the last publish, but only when this fetch failed.
 
@@ -168,6 +228,7 @@ def build(universe, quotes, history, sec, income, fx):
         row = _identity(holding, quote, rank, fx)
         row.update(_price_metrics(hist))
         row.update(_growth_metrics(sec.get(symbol), income.get(symbol)))
+        _derive_pe(row, quote, income.get(symbol))
         _carry_over(row, previous.get(symbol), quote)
 
         if hist is not None:
@@ -190,6 +251,7 @@ def _meta(rows: list[dict], fx: dict) -> dict:
             for src in ("sec", "yahoo", "none")
         },
         "stale_rows": sum(1 for r in rows if r["stale"]),
+        "derived_pe_rows": sum(1 for r in rows if r["trailing_pe_derived"]),
         "fx_rates": {k: round(v, 6) for k, v in sorted(fx.items())},
         "coverage": schema.coverage(rows),
     }

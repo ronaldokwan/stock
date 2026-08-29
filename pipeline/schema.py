@@ -77,6 +77,8 @@ class Stock(BaseModel):
     pct_from_52w_high: float | None = None
 
     # provenance
+    # True when trailing_pe came from build._derive_pe rather than the quote.
+    trailing_pe_derived: bool = False
     history_start: str | None = None
     fundamentals_source: Literal["sec", "yahoo", "none"] = "none"
     fundamentals_years: int = 0

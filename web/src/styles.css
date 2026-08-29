@@ -252,6 +252,13 @@ tbody tr.stale td:first-child { box-shadow: inset 2px 0 0 var(--warn); }
 .source-sec { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
 .source-none { color: var(--warn); }
 
+/* A value the pipeline computed rather than read from the source. Marked so a
+   derived P/E is never mistaken for a quoted one; hover gives the method. */
+.derived {
+  border-bottom: 1px dotted var(--border-strong);
+  cursor: help;
+}
+
 .rank { color: var(--muted); font-size: 12px; }
 .ticker { font-weight: 600; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; }
 .company { overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: 230px; vertical-align: bottom; }

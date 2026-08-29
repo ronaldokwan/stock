@@ -56,6 +56,12 @@ export interface Leaf {
   help?: string
   /** Extra class on the value span, for the three identity columns. */
   className?: string
+  /**
+   * Boolean field marking this value as computed by the pipeline rather than
+   * taken from the source. Rendered with a marker so the two are never
+   * silently mixed in one column.
+   */
+  derivedFlag?: keyof Stock
   size?: number
 }
 
@@ -90,7 +96,8 @@ export const LEAVES: Leaf[] = [
   { id: 'index_weight', header: 'Index wt.', group: 'Size', kind: 'weight', digits: 3,
     help: 'Weight in the SPDR MSCI global index used to build this universe.' },
 
-  { id: 'trailing_pe', header: 'P/E', group: 'Valuation', kind: 'ratio' },
+  { id: 'trailing_pe', header: 'P/E', group: 'Valuation', kind: 'ratio',
+    derivedFlag: 'trailing_pe_derived' },
   { id: 'forward_pe', header: 'Fwd P/E', group: 'Valuation', kind: 'ratio' },
   { id: 'price_to_book', header: 'P/B', group: 'Valuation', kind: 'ratio' },
   { id: 'price_to_sales', header: 'P/S', group: 'Valuation', kind: 'ratio' },

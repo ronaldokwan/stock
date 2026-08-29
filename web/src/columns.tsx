@@ -38,6 +38,18 @@ function numericCell(leaf: Leaf) {
       return <span className="empty" title={explainMissing(row.original, leaf.id)}>{EMPTY}</span>
     }
     const cls = leaf.signed ? (value >= 0 ? 'pos' : 'neg') : leaf.className
+    if (leaf.derivedFlag && row.original[leaf.derivedFlag]) {
+      return (
+        <span
+          className={cls ? `${cls} derived` : 'derived'}
+          title={'Computed from market cap and the last annual net income, '
+            + 'because the data source publishes no EPS for this listing. '
+            + 'An annual figure, not a trailing twelve months.'}
+        >
+          {formatNumber(leaf, value)}
+        </span>
+      )
+    }
     return <span className={cls}>{formatNumber(leaf, value)}</span>
   }
 }

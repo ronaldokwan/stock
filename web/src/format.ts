@@ -57,7 +57,27 @@ export function explainMissing(row: Stock, columnId: string): string {
     return `SEC filings for ${row.symbol} cover ${row.fundamentals_years} years — not enough for a ${years}-year growth rate.`
   }
 
-  if (columnId === 'trailing_pe') return 'No trailing P/E — the company may be lossmaking.'
+  // Not simply "may be lossmaking": Yahoo publishes no EPS at all for some
+  // listings — every Korean line in the universe — and those are filled from
+  // net income where possible. A dash that survives that means one of two
+  // specific things, and profit margin tells them apart.
+  if (columnId === 'trailing_pe') {
+    if (row.profit_margin != null && row.profit_margin < 0) {
+      return `${row.symbol} is lossmaking over the last twelve months, so a `
+        + 'price/earnings ratio is undefined.'
+    }
+    return 'No P/E is published for this listing, and none could be derived: '
+      + 'that needs a recent positive annual net income reported in the same '
+      + 'currency as the market cap.'
+  }
+  if (columnId === 'forward_pe') {
+    return 'No forward P/E — this one needs analyst earnings estimates, which '
+      + 'are not published for every listing.'
+  }
+  if (columnId === 'price_to_book') {
+    return 'No book value is published for this listing, so price/book cannot '
+      + 'be computed.'
+  }
   if (columnId === 'market_cap_usd') return 'Market cap unavailable, or no FX rate for this currency.'
   return 'Not available from the free data sources used.'
 }

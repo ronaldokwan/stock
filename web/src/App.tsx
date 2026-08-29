@@ -162,6 +162,11 @@ export default function App() {
             filings; the rest fall back to roughly four years from Yahoo.
             {' '}20-year growth is available as share-price return only — no free
             source provides 20 years of global fundamentals.
+            {meta.derived_pe_rows > 0 && (
+              <> P/E is computed from market cap and annual net income for{' '}
+                {meta.derived_pe_rows} listings the price source publishes no EPS
+                for; those cells are underlined.</>
+            )}
           </p>
         )}
       </footer>

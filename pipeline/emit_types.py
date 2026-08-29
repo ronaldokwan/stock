@@ -41,6 +41,7 @@ export interface Meta {
   fundamentals_sources: string[]
   fundamentals_breakdown: Record<string, number>
   stale_rows: number
+  derived_pe_rows: number
   fx_rates: Record<string, number>
   coverage: Record<string, number>
 }

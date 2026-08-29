@@ -86,7 +86,14 @@ export function DetailDrawer({ stock, spark, onClose }: Props) {
           <Row label="Market cap" value={money(stock.market_cap_usd)} />
           <Row label="Sector" value={plain(stock.sector)} />
           <Row label="Industry" value={plain(stock.industry)} />
-          <Row label="P/E (trailing)" value={ratio(stock.trailing_pe)} />
+          <Row
+            label={stock.trailing_pe_derived ? 'P/E (trailing, derived)' : 'P/E (trailing)'}
+            value={ratio(stock.trailing_pe)}
+            hint={stock.trailing_pe_derived
+              ? 'Market cap over the last annual net income. The data source '
+                + 'publishes no EPS for this listing, so no P/E of its own.'
+              : undefined}
+          />
           <Row label="P/E (forward)" value={ratio(stock.forward_pe)} />
           <Row label="Dividend yield" value={percent(stock.dividend_yield, 2)} />
 

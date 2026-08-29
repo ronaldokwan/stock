@@ -278,6 +278,28 @@ Separately, a field that previously held a valid value and now resolves to null
 retains the earlier value and is flagged `stale`, so a single failed fetch cannot
 blank a column.
 
+### Derived price/earnings
+
+Yahoo omits `trailingPE` wherever it has no EPS for a listing, and for some
+markets it never has one: every Korean line in the universe returns
+`epsTrailingTwelveMonths` null, so Samsung, SK hynix and Hyundai published
+without a P/E while their peers elsewhere had one.
+
+`build._derive_pe` fills those from market capitalisation over the most recent
+annual net income — the same ratio by another route — for 21 rows. Three guards
+apply, because a wrong P/E is worse than an absent one: the statement must be
+denominated in the currency the market cap is denominated in (a London listing
+reporting in dollars would otherwise divide pounds by dollars and publish a
+plausible-looking number wrong by the exchange rate), the fiscal year must be
+recent, and net income must be positive and not so small that the ratio
+explodes. Rows that fail a guard keep an empty cell.
+
+A derived value is an annual figure rather than a trailing twelve months, so it
+will not exactly match a P/E quoted elsewhere. It carries `trailing_pe_derived`
+and renders underlined, so it is never silently mixed with a quoted one. The
+remaining 101 blanks are mostly genuine: 82 are lossmaking companies, for which
+the ratio is undefined.
+
 ## Testing
 
 ```bash
